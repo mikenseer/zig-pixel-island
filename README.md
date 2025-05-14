@@ -9,7 +9,7 @@ Check out the code: [https://github.com/mikenseer/zig-pixel-island](https://gith
 
 The core inspiration for Zig Pixel Island comes from a blend of several ideas:
 
-* **[Notch's "Breaking The Tower"](https://ludumdare.com/compo/ludum-dare-12/?action=preview&uid=1 Notch):** The concept of a small, resource-gathering and building game with simple yet engaging mechanics.
+* **[Notch's "Breaking The Tower"](https://github.com/al6x/BreakingTheTower):** The concept of a small, resource-gathering and building game with simple yet engaging mechanics.
 * **Settlers of Catan:** The joy of exploring, expanding, and managing resources on a pixel-based island.
 * **Ant Farms / Dwarf Fortress (lite!):** The fascination of watching a small colony of entities (our Peons!) go about their tasks, interact with their environment, and create emergent behaviors in a procedurally generated world.
 
