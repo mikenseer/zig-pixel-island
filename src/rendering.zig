@@ -12,11 +12,11 @@ const Allocator = std_full.mem.Allocator;
 const log = std_full.log;
 const atlas_manager = @import("atlas_manager.zig");
 
-// Converts terrain type to its corresponding color.
+// Converts a TerrainType enum to its corresponding ray.Color.
 fn terrainToRaylibColor(terrain: types.TerrainType, is_overlay: bool) ray.Color {
     _ = is_overlay;
     return switch (terrain) {
-        .VeryDeepWater => config.very_deep_water_color, // Added case
+        .VeryDeepWater => config.very_deep_water_color,
         .DeepWater => config.deep_water_color,
         .ShallowWater => config.shallow_water_color,
         .Sand => config.sand_color,
@@ -33,75 +33,76 @@ pub const EntityMetrics = struct {
     rect: ?ray.Rectangle,
     art_width: c_int,
     art_height: c_int,
+    anchor_x_factor: f32,
+    anchor_y_factor: f32,
 };
 
-pub fn getEntityMetrics(entity: types.Entity) EntityMetrics {
+pub fn getEntityMetrics(entity: types.Entity, am: *const atlas_manager.AtlasManager) EntityMetrics {
     var w: c_int = 0;
     var h: c_int = 0;
-    var make_rect = true;
+    var ax: f32 = 0.0;
+    var ay: f32 = 0.0;
+
+    const sprite_id_opt: ?atlas_manager.SpriteId = switch (entity.entity_type) {
+        .Tree => switch (entity.growth_stage) {
+            0 => .TreeSeedling,
+            1 => .TreeSapling,
+            2 => .TreeSmall,
+            else => .TreeMature,
+        },
+        .RockCluster => .RockCluster,
+        .Brush => .Brush,
+        .Player => .Peon,
+        .Sheep => .Sheep,
+        .Bear => .Bear,
+    };
+
+    if (sprite_id_opt) |sprite_id| {
+        if (am.getSpriteInfo(sprite_id)) |sprite_info| {
+            w = @as(c_int, @intFromFloat(math.round(sprite_info.source_rect.width)));
+            h = @as(c_int, @intFromFloat(math.round(sprite_info.source_rect.height)));
+        } else {
+            log.warn("SpriteInfo not found for {any} in getEntityMetrics, using fallback dimensions.", .{sprite_id});
+            w = 1;
+            h = 1;
+        }
+    } else {
+        log.warn("Could not determine SpriteId for entity type {any} in getEntityMetrics.", .{entity.entity_type});
+        w = 1;
+        h = 1;
+    }
 
     switch (entity.entity_type) {
         .Tree => {
-            w = switch (entity.growth_stage) {
-                0 => @as(c_int, config.seedling_art_width),
-                1 => @as(c_int, config.sapling_art_width),
-                2 => @as(c_int, art.small_tree_art_width),
-                else => @as(c_int, art.mature_tree_art_width),
-            };
-            h = switch (entity.growth_stage) {
-                0 => @as(c_int, config.seedling_art_height),
-                1 => @as(c_int, config.sapling_art_height),
-                2 => @as(c_int, art.small_tree_art_height),
-                else => @as(c_int, art.mature_tree_art_height),
-            };
+            ax = 0.5;
+            ay = 1.0;
         },
-        .RockCluster => {
-            w = config.rock_cluster_art_width;
-            h = config.rock_cluster_art_height;
+        .RockCluster, .Brush => {
+            ax = 0.0;
+            ay = 0.0;
         },
-        .Brush => {
-            w = config.brush_art_width;
-            h = config.brush_art_height;
-        },
-        .Player => {
-            w = art.peon_art_width;
-            h = art.peon_art_height;
-            make_rect = false;
-        },
-        .Sheep => {
-            w = art.sheep_art_width;
-            h = art.sheep_art_height;
-            make_rect = false;
-        },
-        .Bear => {
-            w = art.bear_art_width;
-            h = art.bear_art_height;
-            make_rect = false;
+        .Player, .Sheep, .Bear => {
+            ax = 0.5;
+            ay = 1.0;
         },
     }
 
-    var opt_rect: ?ray.Rectangle = null;
-    if (make_rect) {
-        const anchor_x_offset = switch (entity.entity_type) {
-            .Tree => -@divTrunc(w, 2),
-            else => 0,
-        };
-        const anchor_y_offset = switch (entity.entity_type) {
-            .Tree => -h + 1,
-            else => 0,
-        };
-        opt_rect = ray.Rectangle{
-            .x = @as(f32, @floatFromInt(entity.x + anchor_x_offset)),
-            .y = @as(f32, @floatFromInt(entity.y + anchor_y_offset)),
-            .width = @as(f32, @floatFromInt(w)),
-            .height = @as(f32, @floatFromInt(h)),
-        };
-    }
+    const rect_x = @as(f32, @floatFromInt(entity.x)) - (@as(f32, @floatFromInt(w)) * ax);
+    const rect_y = @as(f32, @floatFromInt(entity.y)) - (@as(f32, @floatFromInt(h)) * ay);
+
+    const opt_rect = ray.Rectangle{
+        .x = rect_x,
+        .y = rect_y,
+        .width = @as(f32, @floatFromInt(w)),
+        .height = @as(f32, @floatFromInt(h)),
+    };
 
     return EntityMetrics{
         .rect = opt_rect,
         .art_width = w,
         .art_height = h,
+        .anchor_x_factor = ax,
+        .anchor_y_factor = ay,
     };
 }
 
@@ -123,7 +124,7 @@ pub fn redrawStaticWorldTexture(world: *const types.GameWorld, target_texture: r
     }
 }
 
-fn drawEntityFromAtlas(entity: types.Entity, am: *const atlas_manager.AtlasManager) void {
+fn drawEntityFromAtlas(entity: types.Entity, am: *const atlas_manager.AtlasManager, metrics: EntityMetrics) void {
     const sprite_id: ?atlas_manager.SpriteId = switch (entity.entity_type) {
         .Tree => switch (entity.growth_stage) {
             0 => .TreeSeedling,
@@ -140,21 +141,12 @@ fn drawEntityFromAtlas(entity: types.Entity, am: *const atlas_manager.AtlasManag
 
     if (sprite_id) |id| {
         if (am.getSpriteInfo(id)) |sprite_info| {
-            //const metrics = getEntityMetrics(entity);
-
-            var dest_x_f32: f32 = @as(f32, @floatFromInt(entity.x));
-            var dest_y_f32: f32 = @as(f32, @floatFromInt(entity.y));
-
-            switch (entity.entity_type) {
-                .Tree => {
-                    dest_x_f32 = @as(f32, @floatFromInt(entity.x)) - (sprite_info.source_rect.width / 2.0);
-                    dest_y_f32 = @as(f32, @floatFromInt(entity.y)) - sprite_info.source_rect.height + 1.0;
-                },
-                .RockCluster, .Brush, .Player, .Sheep, .Bear => {},
+            if (metrics.rect) |dest_rect| {
+                const dest_pos = ray.Vector2{ .x = dest_rect.x, .y = dest_rect.y };
+                ray.drawTextureRec(am.atlas_texture, sprite_info.source_rect, dest_pos, ray.Color.white);
+            } else {
+                log.warn("Metrics rect not found for drawing entity {any}", .{id});
             }
-
-            const dest_pos = ray.Vector2{ .x = dest_x_f32, .y = dest_y_f32 };
-            ray.drawTextureRec(am.atlas_texture, sprite_info.source_rect, dest_pos, ray.Color.white);
         } else {
             log.warn("SpriteInfo not found for SpriteId: {any}", .{id});
         }
@@ -170,6 +162,7 @@ pub const DrawableEntity = struct {
     layer: DrawLayer,
     is_cloud: bool,
     ground_elevation_normalized: f32 = 0.0,
+    metrics: ?EntityMetrics = null,
 };
 
 const DrawLayer = enum(u8) {
@@ -205,25 +198,14 @@ pub fn drawDynamicElementsAndOverlays(
     draw_list: *ArrayList(DrawableEntity),
 ) void {
     _ = allocator;
-
     draw_list.shrinkRetainingCapacity(0);
 
     for (world.entities.items) |*entity_ptr| {
         const entity = entity_ptr.*;
-        const metrics = getEntityMetrics(entity);
+        const metrics = getEntityMetrics(entity, atlas_manager_ptr);
         var sort_y_val: i32 = entity.y;
 
-        switch (entity.entity_type) {
-            .Tree => {
-                sort_y_val = entity.y;
-            },
-            .RockCluster, .Brush => {
-                sort_y_val = entity.y + metrics.art_height - 1;
-            },
-            .Player, .Sheep, .Bear => {
-                sort_y_val = entity.y + metrics.art_height - 1;
-            },
-        }
+        sort_y_val = entity.y + @as(i32, @intFromFloat(math.round(@as(f32, @floatFromInt(metrics.art_height)) * (1.0 - metrics.anchor_y_factor))));
 
         const layer_val: DrawLayer = switch (entity.entity_type) {
             .RockCluster => .Rock,
@@ -251,6 +233,7 @@ pub fn drawDynamicElementsAndOverlays(
             .layer = layer_val,
             .is_cloud = false,
             .ground_elevation_normalized = entity_ground_elevation,
+            .metrics = metrics,
         }) catch |err| {
             log.err("Failed to append entity to draw_list: {s}", .{@errorName(err)});
         };
@@ -270,6 +253,7 @@ pub fn drawDynamicElementsAndOverlays(
             .layer = .Cloud,
             .is_cloud = true,
             .ground_elevation_normalized = 1.0,
+            .metrics = null,
         }) catch |err| {
             log.err("Failed to append cloud to draw_list: {s}", .{@errorName(err)});
         };
@@ -291,7 +275,11 @@ pub fn drawDynamicElementsAndOverlays(
                 }
             }
         } else if (drawable.entity_ptr) |entity_ref| {
-            drawEntityFromAtlas(entity_ref.*, atlas_manager_ptr);
+            if (drawable.metrics) |metrics_val| {
+                if (drawable.ground_elevation_normalized < config.cloud_render_height_threshold_normalized) {
+                    drawEntityFromAtlas(entity_ref.*, atlas_manager_ptr, metrics_val);
+                }
+            }
         }
     }
 
@@ -326,15 +314,44 @@ pub fn drawDynamicElementsAndOverlays(
             }
         }
     }
+    for (draw_list.items) |drawable| {
+        if (!drawable.is_cloud and drawable.entity_ptr != null) {
+            if (drawable.metrics) |metrics_val| {
+                if (drawable.ground_elevation_normalized >= config.cloud_render_height_threshold_normalized) {
+                    drawEntityFromAtlas(drawable.entity_ptr.?.*, atlas_manager_ptr, metrics_val);
+                }
+            }
+        }
+    }
 
+    // Draw hover effect for ANY hovered entity that has a rect
     if (hovered_entity_idx) |h_idx| {
         if (h_idx < world.entities.items.len) {
             const entity = world.entities.items[h_idx];
-            if (entity.entity_type != .Player and entity.entity_type != .Sheep and entity.entity_type != .Bear) {
-                const metrics = getEntityMetrics(entity);
-                if (metrics.rect) |entity_rect_for_hover| {
-                    ray.drawRectangleLinesEx(entity_rect_for_hover, 1.0 / camera_ptr.zoom, ray.Color.white);
+            var metrics_for_hover: ?EntityMetrics = null;
+            // Find the pre-calculated metrics from the draw_list to avoid recalculating
+            for (draw_list.items) |*item| {
+                if (item.entity_ptr != null and @intFromPtr(item.entity_ptr) == @intFromPtr(&world.entities.items[h_idx])) {
+                    metrics_for_hover = item.metrics;
+                    break;
                 }
+            }
+            // Fallback if not found in draw_list (should be rare if list is up-to-date)
+            if (metrics_for_hover == null) {
+                metrics_for_hover = getEntityMetrics(entity, atlas_manager_ptr);
+            }
+
+            if (metrics_for_hover.?.rect) |entity_rect_for_hover| {
+                var line_thickness: f32 = 1.0;
+                if (camera_ptr.zoom != 0) {
+                    line_thickness = 1.0 / camera_ptr.zoom;
+                }
+                // MODIFIED: Choose outline color based on entity type
+                const outline_color = switch (entity.entity_type) {
+                    .Player, .Sheep, .Bear => config.ai_selection_outline_color,
+                    .Tree, .RockCluster, .Brush => config.static_selection_outline_color,
+                };
+                ray.drawRectangleLinesEx(entity_rect_for_hover, line_thickness, outline_color);
             }
         }
     }

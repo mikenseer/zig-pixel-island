@@ -36,6 +36,18 @@ pub const seedling_color: ray.Color = .{ .r = 60, .g = 150, .b = 60, .a = 255 };
 pub const brush_color_main: ray.Color = .{ .r = 180, .g = 160, .b = 40, .a = 255 };
 pub const brush_color_highlight: ray.Color = .{ .r = 210, .g = 190, .b = 90, .a = 255 };
 
+// --- UI Specific Colors & Styles ---
+pub const static_selection_outline_color: ray.Color = ray.Color.white; // White for Trees, Rocks, Brush
+pub const ai_selection_outline_color: ray.Color = ray.Color.lime; // Bright green for AI entities
+pub const ui_panel_background_color: ray.Color = .{ .r = 20, .g = 20, .b = 20, .a = 210 };
+pub const ui_panel_text_color: ray.Color = ray.Color.white;
+pub const ui_panel_padding: c_int = 8;
+pub const ui_panel_line_spacing: c_int = 14;
+pub const ui_panel_font_size: c_int = 10;
+pub const ui_panel_stat_value_color: ray.Color = ray.Color.gold;
+pub const ui_panel_mouse_offset_x: c_int = 15; // Offset panel from mouse cursor
+pub const ui_panel_mouse_offset_y: c_int = 10;
+
 // --- Cloud Entity Settings ---
 pub const num_small_clouds: u32 = 10;
 pub const num_medium_clouds: u32 = 7;
@@ -85,8 +97,8 @@ pub const plains_elevation_threshold: f32 = 0.69;
 pub const grid_cell_size_coarse_shape: u32 = 64;
 pub const grid_cell_size_land_elev: u32 = 32;
 pub const grid_cell_size_fine_detail: u32 = 16;
-pub const grid_cell_size_forest_core: u32 = 72; // MODIFIED: Further reduced for more, smaller forest blotches
-pub const grid_cell_size_deforestation: u32 = 80; // MODIFIED: Kept relatively large to create clearings between smaller forest cores
+pub const grid_cell_size_forest_core: u32 = 72;
+pub const grid_cell_size_deforestation: u32 = 80;
 pub const grid_cell_size_rock: u32 = 56;
 pub const grid_cell_size_brush: u32 = 40;
 
@@ -115,7 +127,7 @@ pub const forest_core_processing_power: f32 = 1.05;
 pub const deforestation_octaves: u32 = 3;
 pub const deforestation_persistence: f32 = 0.50;
 pub const deforestation_lacunarity: f32 = 2.0;
-pub const deforestation_processing_power: f32 = 1.2; // MODIFIED: Even softer clearings for better fade
+pub const deforestation_processing_power: f32 = 1.2;
 
 pub const rock_octaves: u32 = 2;
 pub const rock_persistence: f32 = 0.45;
@@ -124,52 +136,52 @@ pub const rock_lacunarity: f32 = 2.0;
 pub const brush_octaves: u32 = 3;
 pub const brush_persistence: f32 = 0.5;
 pub const brush_lacunarity: f32 = 2.0;
-pub const brush_deforestation_power_factor: f32 = 0.7; // MODIFIED: Less impact
+pub const brush_deforestation_power_factor: f32 = 0.7;
 
 // --- Entity Spawning Probabilities & Thresholds (for entity_spawner.zig) ---
 // Tree Spawning
 pub const grass_tree_base_probability: f32 = 0.45;
-pub const tree_density_threshold: f32 = 0.08; // MODIFIED: Very low for wide fade
-pub const tree_spawn_density_power: f32 = 1.05; // MODIFIED: Very soft falloff
-pub const max_tree_spawn_density_cap: f32 = 0.30; // MODIFIED: Reduced significantly
+pub const tree_density_threshold: f32 = 0.08;
+pub const tree_spawn_density_power: f32 = 1.05;
+pub const max_tree_spawn_density_cap: f32 = 0.30;
 pub const tree_age_noise_offset: f32 = 0.05;
 pub const tree_age_random_spread: f32 = 1.0;
 pub const tree_age_range_radius: f32 = 0.4;
 
-pub const plains_tree_base_probability: f32 = 0.004; // MODIFIED: Slightly higher
-pub const plains_tree_core_threshold: f32 = 0.50; // MODIFIED: Lowered
+pub const plains_tree_base_probability: f32 = 0.004;
+pub const plains_tree_core_threshold: f32 = 0.50;
 
 // Rock Spawning
 pub const mountain_rock_probability: f32 = 0.0;
 pub const mountain_rock_noise_thresh: f32 = 0.99;
 pub const plains_upper_edge_factor: f32 = 0.07;
-pub const upper_plains_rock_probability: f32 = 0.04; // MODIFIED: Reduced
-pub const upper_plains_rock_noise_thresh: f32 = 0.55; // MODIFIED: Adjusted
-pub const mid_plains_rock_probability: f32 = 0.025; // MODIFIED: Very rare
-pub const mid_plains_rock_noise_thresh: f32 = 0.55; // MODIFIED: High threshold
-pub const grass_rock_probability: f32 = 0.01; // MODIFIED: Increased
-pub const grass_rock_noise_thresh: f32 = 0.58; // MODIFIED: Slightly lowered to allow some
-pub const sand_rock_probability: f32 = 0.005; // MODIFIED: Increased
-pub const sand_rock_noise_thresh: f32 = 0.60; // MODIFIED: Slightly lowered
-pub const shallow_water_rock_probability: f32 = 0.001; // MODIFIED: Increased
-pub const shallow_water_rock_noise_thresh: f32 = 0.66; // MODIFIED: Slightly lowered
+pub const upper_plains_rock_probability: f32 = 0.04;
+pub const upper_plains_rock_noise_thresh: f32 = 0.55;
+pub const mid_plains_rock_probability: f32 = 0.025;
+pub const mid_plains_rock_noise_thresh: f32 = 0.55;
+pub const grass_rock_probability: f32 = 0.01;
+pub const grass_rock_noise_thresh: f32 = 0.58;
+pub const sand_rock_probability: f32 = 0.005;
+pub const sand_rock_noise_thresh: f32 = 0.60;
+pub const shallow_water_rock_probability: f32 = 0.001;
+pub const shallow_water_rock_noise_thresh: f32 = 0.66;
 
 // Brush Spawning
-pub const plains_brush_probability: f32 = 0.20; // MODIFIED: Reduced
+pub const plains_brush_probability: f32 = 0.20;
 pub const plains_brush_noise_thresh: f32 = 0.45;
 pub const plains_near_sand_brush_noise_thresh: f32 = 0.70;
-pub const grass_brush_probability: f32 = 0.12; // MODIFIED: Reduced
+pub const grass_brush_probability: f32 = 0.12;
 pub const grass_brush_noise_thresh: f32 = 0.58;
 pub const grass_near_sand_brush_noise_thresh: f32 = 0.85;
 pub const plains_brush_sand_transition_factor: f32 = 0.045;
 pub const grass_brush_sand_transition_factor: f32 = 0.035;
 pub const brush_sand_transition_prob_multiplier: f32 = 0.1;
-pub const sand_brush_probability: f32 = 0.03; // MODIFIED: Increased
-pub const sand_brush_noise_thresh: f32 = 0.78; // MODIFIED: Lowered
-// Coastal Brush (NEW)
-pub const coastal_grass_brush_max_dist_to_sand: u32 = 2; // How many tiles away from sand to consider "coastal" for grass
-pub const coastal_grass_brush_probability: f32 = 0.55; // Probability for brush on these coastal grass tiles
-pub const coastal_grass_brush_noise_thresh: f32 = 0.45; // Noise threshold for coastal brush
+pub const sand_brush_probability: f32 = 0.03;
+pub const sand_brush_noise_thresh: f32 = 0.78;
+// Coastal Brush
+pub const coastal_grass_brush_max_dist_to_sand: u32 = 2;
+pub const coastal_grass_brush_probability: f32 = 0.55;
+pub const coastal_grass_brush_noise_thresh: f32 = 0.45;
 
 // --- Static Entity Art Dimensions ---
 pub const rock_cluster_art_width = 6;

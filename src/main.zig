@@ -47,6 +47,7 @@ const min_zoom: f32 = 1.0;
 const max_zoom: f32 = @min(@as(f32, @floatFromInt(config.screen_width)), @as(f32, @floatFromInt(config.screen_height)));
 const zoom_speed_factor: f32 = 0.1;
 var hovered_entity_idx: ?usize = null;
+var current_mouse_screen_pos: ray.Vector2 = .{ .x = 0, .y = 0 }; // Store current mouse screen position
 
 // --- Rendering ---
 var static_world_texture: ray.RenderTexture2D = undefined;
@@ -169,7 +170,7 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
 
     background_audio_stream = try ray.loadAudioStream(ogg_wave_info.sampleRate, ogg_wave_info.sampleSize, ogg_wave_info.channels);
     audio_stream_loaded = true;
-    errdefer { // Wrapped in a block for clarity with the conditional
+    errdefer {
         if (audio_stream_loaded) {
             ray.unloadAudioStream(background_audio_stream);
         }
@@ -181,7 +182,7 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
     log.info("Audio Initialized.", .{});
 
     updateAndDrawLoadingStatus("Setting up Game Systems...", .{});
-    ray.setTargetFPS(60);
+    ray.setTargetFPS(244);
 
     camera.target = .{ .x = @as(f32, @floatFromInt(config.screen_width)) / 2.0, .y = @as(f32, @floatFromInt(config.screen_height)) / 2.0 };
     camera.offset = .{ .x = @as(f32, @floatFromInt(config.screen_width)) / 2.0, .y = @as(f32, @floatFromInt(config.screen_height)) / 2.0 };
@@ -205,7 +206,7 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
 
     updateAndDrawLoadingStatus("Creating Texture Atlas...", .{});
     atlas_manager_instance = try atlas_manager.AtlasManager.init(allocator);
-    errdefer { // Wrapped in a block for clarity with the conditional
+    errdefer {
         if (atlas_manager_instance) |*am| {
             am.deinit();
         }
@@ -254,6 +255,9 @@ fn shutdownGame(allocator: std_full.mem.Allocator) void {
 fn updateGame(allocator: std_full.mem.Allocator) void {
     _ = allocator;
 
+    current_mouse_screen_pos = ray.getMousePosition(); // Update global mouse screen position
+    const mouse_world_pos = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
+
     peon_move_timer += 1;
     animal_move_timer += 1;
 
@@ -278,27 +282,14 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
 
     world.cloud_system.update();
 
-    const mouse_screen_pos = ray.getMousePosition();
-    const mouse_world_pos = ray.getScreenToWorld2D(mouse_screen_pos, camera);
-
     hovered_entity_idx = null;
     var i_hover: usize = world.entities.items.len;
     while (i_hover > 0) {
         const current_entity_idx = i_hover - 1;
         const entity = world.entities.items[current_entity_idx];
-        const entity_metrics = rendering.getEntityMetrics(entity);
-        const entity_rect = entity_metrics.rect;
-        var is_collectible = false;
-
-        switch (entity.entity_type) {
-            .Tree, .RockCluster, .Brush => {
-                is_collectible = true;
-            },
-            .Player, .Sheep, .Bear => {},
-        }
-
-        if (is_collectible) {
-            if (entity_rect) |rect| {
+        if (atlas_manager_instance) |am_instance| {
+            const entity_metrics = rendering.getEntityMetrics(entity, &am_instance);
+            if (entity_metrics.rect) |rect| {
                 if (ray.checkCollisionPointRec(mouse_world_pos, rect)) {
                     hovered_entity_idx = current_entity_idx;
                     break;
@@ -310,10 +301,10 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
 
     const wheel_move = ray.getMouseWheelMove();
     if (wheel_move != 0) {
-        const mouse_world_pos_before_zoom = ray.getScreenToWorld2D(mouse_screen_pos, camera);
+        const mouse_world_pos_before_zoom = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
         camera.zoom += wheel_move * camera.zoom * zoom_speed_factor;
         camera.zoom = math.clamp(camera.zoom, min_zoom, max_zoom);
-        const mouse_world_pos_after_zoom = ray.getScreenToWorld2D(mouse_screen_pos, camera);
+        const mouse_world_pos_after_zoom = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
         camera.target.x += mouse_world_pos_before_zoom.x - mouse_world_pos_after_zoom.x;
         camera.target.y += mouse_world_pos_before_zoom.y - mouse_world_pos_after_zoom.y;
     }
@@ -321,7 +312,7 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
     if (ray.isMouseButtonPressed(ray.MouseButton.left)) {
         var ui_interacted_this_click = false;
         if (atlas_manager_instance) |am_instance| {
-            if (ui.checkMuteButtonClick(&am_instance, mouse_screen_pos)) {
+            if (ui.checkMuteButtonClick(&am_instance, current_mouse_screen_pos)) {
                 is_music_muted = !is_music_muted;
                 if (audio_stream_loaded) {
                     ray.setAudioStreamVolume(background_audio_stream, if (is_music_muted) 0.0 else music_volume);
@@ -336,18 +327,14 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
                     const entity_to_collect = world.entities.items[entity_idx_to_collect];
                     var collected_this_frame = false;
                     switch (entity_to_collect.entity_type) {
-                        .Tree => {
-                            collected_wood += 1;
-                            _ = world.entities.orderedRemove(entity_idx_to_collect);
-                            collected_this_frame = true;
-                        },
-                        .RockCluster => {
-                            collected_rocks += 1;
-                            _ = world.entities.orderedRemove(entity_idx_to_collect);
-                            collected_this_frame = true;
-                        },
-                        .Brush => {
-                            collected_brush_items += 1;
+                        .Tree, .RockCluster, .Brush => {
+                            if (entity_to_collect.entity_type == .Tree) {
+                                collected_wood += 1;
+                            } else if (entity_to_collect.entity_type == .RockCluster) {
+                                collected_rocks += 1;
+                            } else if (entity_to_collect.entity_type == .Brush) {
+                                collected_brush_items += 1;
+                            }
                             _ = world.entities.orderedRemove(entity_idx_to_collect);
                             collected_this_frame = true;
                         },
@@ -372,9 +359,6 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         rendering.redrawStaticWorldTexture(&world, static_world_texture);
         static_world_needs_redraw = false;
     }
-    // REMOVED: ray.updateAudioStream(background_audio_stream);
-    // This call is not needed when using an audio callback with ray.setAudioStreamCallback.
-    // The callback handles feeding data to the stream.
 }
 
 // Main game drawing logic.
@@ -402,6 +386,8 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
             collected_brush_items,
             is_music_muted,
             audio_stream_loaded,
+            hovered_entity_idx,
+            current_mouse_screen_pos, // Pass current mouse screen position
         );
     }
 }

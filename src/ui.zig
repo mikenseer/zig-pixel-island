@@ -7,12 +7,14 @@ const config = @import("config.zig");
 const types = @import("types.zig");
 const atlas_manager = @import("atlas_manager.zig");
 const log = std_full.log;
+const math = std_full.math;
 
 const ui_padding: c_int = 10;
-const font_size: c_int = 10;
-const line_spacing: c_int = 15;
+const font_size: c_int = 10; // Default font size for resource/entity counts
+const line_spacing: c_int = 15; // Default line spacing for resource/entity counts
 const text_icon_spacing: c_int = 5;
 
+// Helper function to draw a line of text for a resource, including its icon.
 fn drawResourceLine(
     allocator: std_full.mem.Allocator,
     label_start_x: c_int,
@@ -21,19 +23,24 @@ fn drawResourceLine(
     icon_sprite_id: atlas_manager.SpriteId,
     am: *const atlas_manager.AtlasManager,
 ) void {
-    const value_str = fmt.allocPrintZ(allocator, "{d}", .{value}) catch "OOM";
+    const value_str = fmt.allocPrintZ(allocator, "{d}", .{value}) catch |err| {
+        log.err("Failed to allocate string for resource value: {s}", .{@errorName(err)});
+        const oom_str = "OOM";
+        ray.drawText(oom_str, label_start_x - ray.measureText(oom_str, font_size), current_y.*, font_size, ray.Color.red);
+        current_y.* += line_spacing;
+        return;
+    };
     defer allocator.free(value_str);
 
     const text_width = ray.measureText(value_str, font_size);
-
     var icon_width: c_int = 0;
     var icon_height: c_int = 0;
     var icon_dest_pos = ray.Vector2.zero();
     var icon_source_rect: ?ray.Rectangle = null;
 
     if (am.getSpriteInfo(icon_sprite_id)) |sprite_info| {
-        icon_width = @as(c_int, @intFromFloat(sprite_info.source_rect.width));
-        icon_height = @as(c_int, @intFromFloat(sprite_info.source_rect.height));
+        icon_width = @as(c_int, @intFromFloat(math.round(sprite_info.source_rect.width)));
+        icon_height = @as(c_int, @intFromFloat(math.round(sprite_info.source_rect.height)));
         icon_source_rect = sprite_info.source_rect;
     } else {
         log.warn("Icon sprite info not found for {any}", .{icon_sprite_id});
@@ -49,23 +56,140 @@ fn drawResourceLine(
     if (icon_source_rect) |src_rect| {
         ray.drawTextureRec(am.atlas_texture, src_rect, icon_dest_pos, ray.Color.white);
     }
-
     current_y.* += line_spacing;
 }
 
+// Helper function to draw a simple line of text.
 fn drawTextLine(
     allocator: std_full.mem.Allocator,
     label_start_x: c_int,
     current_y: *c_int,
-    comptime fmt_str: []const u8,
+    comptime fmt_str_arg: []const u8,
     args: anytype,
+    color: ray.Color,
+    size: c_int,
+    spacing: c_int,
 ) void {
-    const text_str = fmt.allocPrintZ(allocator, fmt_str, args) catch "OOM";
-    defer allocator.free(text_str);
-    ray.drawText(text_str, label_start_x, current_y.*, font_size, ray.Color.white);
-    current_y.* += line_spacing;
+    var temp_buf: [128]u8 = undefined;
+    const text_str = fmt.bufPrintZ(&temp_buf, fmt_str_arg, args) catch |err| {
+        log.err("Failed to format text line (bufPrintZ): {s}", .{@errorName(err)});
+        const alloc_text_str = fmt.allocPrintZ(allocator, fmt_str_arg, args) catch |alloc_err| {
+            log.err("Failed to allocate string for text line: {s}", .{@errorName(alloc_err)});
+            const oom_str = "OOM";
+            ray.drawText(oom_str, label_start_x, current_y.*, size, ray.Color.red);
+            current_y.* += spacing;
+            return;
+        };
+        defer allocator.free(alloc_text_str);
+        ray.drawText(alloc_text_str, label_start_x, current_y.*, size, color);
+        current_y.* += spacing;
+        return;
+    };
+
+    ray.drawText(text_str, label_start_x, current_y.*, size, color);
+    current_y.* += spacing;
 }
 
+// Draws the stats panel for a hovered entity, anchored to mouse position.
+fn drawHoveredEntityStatsPanel(
+    allocator: std_full.mem.Allocator,
+    entity: types.Entity,
+    mouse_screen_pos: ray.Vector2, // Mouse screen position
+) !void {
+    const panel_padding = config.ui_panel_padding;
+    const panel_font_size = config.ui_panel_font_size;
+    const panel_line_spacing = config.ui_panel_line_spacing;
+    const panel_bg_color = config.ui_panel_background_color;
+    const panel_text_color = config.ui_panel_text_color;
+    const panel_stat_value_color = config.ui_panel_stat_value_color;
+    const panel_offset_x = config.ui_panel_mouse_offset_x;
+    const panel_offset_y = config.ui_panel_mouse_offset_y;
+
+    var text_lines = std_full.ArrayList([:0]const u8).init(allocator);
+    defer {
+        for (text_lines.items) |duped_line| {
+            allocator.free(duped_line);
+        }
+        text_lines.deinit();
+    }
+
+    var temp_line_buf: [128]u8 = undefined;
+
+    const type_name_str = @tagName(entity.entity_type);
+    const line1 = fmt.bufPrintZ(&temp_line_buf, "{s}", .{type_name_str}) catch "Entity";
+    try text_lines.append(try allocator.dupeZ(u8, line1));
+
+    const line2 = fmt.bufPrintZ(&temp_line_buf, "HP: {d}/{d}", .{ entity.current_hp, entity.max_hp }) catch "HP: N/A";
+    try text_lines.append(try allocator.dupeZ(u8, line2));
+
+    if (entity.entity_type == .Tree) {
+        const line3 = fmt.bufPrintZ(&temp_line_buf, "Age: {d}", .{entity.growth_stage}) catch "Age: N/A";
+        try text_lines.append(try allocator.dupeZ(u8, line3));
+    }
+
+    var max_text_width: c_int = 0;
+    for (text_lines.items) |line_text| {
+        const w = ray.measureText(line_text, panel_font_size);
+        if (w > max_text_width) {
+            max_text_width = w;
+        }
+    }
+
+    const panel_width = max_text_width + (panel_padding * 2);
+    const panel_height = @as(c_int, @intCast(text_lines.items.len)) * panel_line_spacing - (panel_line_spacing - panel_font_size) + (panel_padding * 2);
+
+    // CORRECTED: Use @intFromFloat after math.round
+    var panel_x: c_int = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) + panel_offset_x;
+    var panel_y: c_int = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) + panel_offset_y;
+
+    if (panel_x + panel_width > config.screen_width) {
+        panel_x = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) - panel_width - panel_offset_x;
+    }
+    if (panel_y + panel_height > config.screen_height) {
+        panel_y = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) - panel_height - panel_offset_y;
+    }
+    if (panel_x < 0) {
+        panel_x = 0;
+    }
+    if (panel_y < 0) {
+        panel_y = 0;
+    }
+
+    ray.drawRectangle(panel_x, panel_y, panel_width, panel_height, panel_bg_color);
+    ray.drawRectangleLines(panel_x, panel_y, panel_width, panel_height, ray.Color.dark_gray);
+
+    var current_text_y = panel_y + panel_padding;
+    var temp_draw_buf: [64]u8 = undefined;
+
+    for (text_lines.items) |line_text_z| {
+        if (std_full.mem.startsWith(u8, line_text_z, "HP:") or std_full.mem.startsWith(u8, line_text_z, "Age:")) {
+            if (std_full.mem.indexOfScalar(u8, line_text_z, ':')) |colon_idx| {
+                const label_part_slice = line_text_z[0 .. colon_idx + 1];
+                const label_draw_str = fmt.bufPrintZ(&temp_draw_buf, "{s}", .{label_part_slice}) catch |e| b: {
+                    log.err("fmt label: {s}", .{@errorName(e)});
+                    break :b line_text_z;
+                };
+                ray.drawText(label_draw_str, panel_x + panel_padding, current_text_y, panel_font_size, panel_text_color);
+
+                const label_width = ray.measureText(label_draw_str, panel_font_size);
+
+                const value_part_slice = line_text_z[colon_idx + 2 ..];
+                const value_draw_str = fmt.bufPrintZ(&temp_draw_buf, "{s}", .{value_part_slice}) catch |e| b: {
+                    log.err("fmt value: {s}", .{@errorName(e)});
+                    break :b "";
+                };
+                ray.drawText(value_draw_str, panel_x + panel_padding + label_width + 2, current_text_y, panel_font_size, panel_stat_value_color);
+            } else {
+                ray.drawText(line_text_z, panel_x + panel_padding, current_text_y, panel_font_size, panel_text_color);
+            }
+        } else {
+            ray.drawText(line_text_z, panel_x + panel_padding, current_text_y, panel_font_size, panel_text_color);
+        }
+        current_text_y += panel_line_spacing;
+    }
+}
+
+// Main function to draw all UI elements.
 pub fn drawUI(
     allocator: std_full.mem.Allocator,
     atlas_manager_ptr: *const atlas_manager.AtlasManager,
@@ -75,6 +199,8 @@ pub fn drawUI(
     collected_brush_items: u32,
     is_music_muted: bool,
     audio_stream_loaded: bool,
+    hovered_entity_idx: ?usize,
+    mouse_screen_pos: ray.Vector2,
 ) void {
     var current_y_pos_resources: c_int = ui_padding;
     const resource_label_x = config.screen_width - ui_padding;
@@ -90,8 +216,8 @@ pub fn drawUI(
     var tree_count: u32 = 0;
     var rock_cluster_count: u32 = 0;
     var brush_count: u32 = 0;
-    var sheep_count: u32 = 0; // New counter
-    var bear_count: u32 = 0; // New counter
+    var sheep_count: u32 = 0;
+    var bear_count: u32 = 0;
 
     for (world.entities.items) |entity_item| {
         switch (entity_item.entity_type) {
@@ -99,23 +225,23 @@ pub fn drawUI(
             .Tree => tree_count += 1,
             .RockCluster => rock_cluster_count += 1,
             .Brush => brush_count += 1,
-            .Sheep => sheep_count += 1, // Count sheep
-            .Bear => bear_count += 1, // Count bears
+            .Sheep => sheep_count += 1,
+            .Bear => bear_count += 1,
         }
     }
 
-    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Peons: {d}", .{peon_count});
-    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Trees: {d}", .{tree_count});
-    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Rocks: {d}", .{rock_cluster_count});
-    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Brush: {d}", .{brush_count});
-    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Sheep: {d}", .{sheep_count}); // Display sheep count
-    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Bears: {d}", .{bear_count}); // Display bear count
-    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Total: {d}", .{world.entities.items.len});
+    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Peons: {d}", .{peon_count}, config.ui_panel_text_color, font_size, line_spacing);
+    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Trees: {d}", .{tree_count}, config.ui_panel_text_color, font_size, line_spacing);
+    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Rocks: {d}", .{rock_cluster_count}, config.ui_panel_text_color, font_size, line_spacing);
+    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Brush: {d}", .{brush_count}, config.ui_panel_text_color, font_size, line_spacing);
+    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Sheep: {d}", .{sheep_count}, config.ui_panel_text_color, font_size, line_spacing);
+    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Bears: {d}", .{bear_count}, config.ui_panel_text_color, font_size, line_spacing);
+    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Total: {d}", .{world.entities.items.len}, config.ui_panel_text_color, font_size, line_spacing);
 
     if (audio_stream_loaded) {
         const speaker_sprite_id = if (is_music_muted) atlas_manager.SpriteId.SpeakerMuted else atlas_manager.SpriteId.SpeakerUnmuted;
         if (atlas_manager_ptr.getSpriteInfo(speaker_sprite_id)) |sprite_info| {
-            const icon_height = @as(c_int, @intFromFloat(sprite_info.source_rect.height));
+            const icon_height = @as(c_int, @intFromFloat(math.round(sprite_info.source_rect.height)));
             const icon_x = ui_padding;
             const icon_y = config.screen_height - ui_padding - icon_height;
             const dest_pos = ray.Vector2{ .x = @as(f32, @floatFromInt(icon_x)), .y = @as(f32, @floatFromInt(icon_y)) };
@@ -126,19 +252,29 @@ pub fn drawUI(
     }
 
     const current_fps = ray.getFPS();
-    const fps_text = fmt.allocPrintZ(allocator, "FPS: {d}", .{current_fps}) catch "FPS: OOM";
-    defer allocator.free(fps_text);
+    const fps_text_buf_size = 16;
+    var fps_text_buf: [fps_text_buf_size]u8 = undefined;
+    const fps_text_slice_z = fmt.bufPrintZ(&fps_text_buf, "FPS: {d}", .{current_fps}) catch "FPS: N/A";
 
-    const fps_text_width_val = ray.measureText(fps_text, font_size);
+    const fps_text_width_val = ray.measureText(fps_text_slice_z, font_size);
     const fps_x_pos = config.screen_width - ui_padding - fps_text_width_val;
     const fps_y_pos = config.screen_height - ui_padding - font_size;
-    ray.drawText(fps_text, fps_x_pos, fps_y_pos, font_size, ray.Color.white);
+    ray.drawText(fps_text_slice_z, fps_x_pos, fps_y_pos, font_size, ray.Color.white);
+
+    if (hovered_entity_idx) |h_idx| {
+        if (h_idx < world.entities.items.len) {
+            const entity = world.entities.items[h_idx];
+            drawHoveredEntityStatsPanel(allocator, entity, mouse_screen_pos) catch |err| {
+                log.err("Failed to draw entity stats panel: {s}", .{@errorName(err)});
+            };
+        }
+    }
 }
 
 pub fn checkMuteButtonClick(am: *const atlas_manager.AtlasManager, mouse_pos: ray.Vector2) bool {
     if (am.getSpriteInfo(.SpeakerUnmuted)) |sprite_info| {
-        const icon_width = @as(c_int, @intFromFloat(sprite_info.source_rect.width));
-        const icon_height = @as(c_int, @intFromFloat(sprite_info.source_rect.height));
+        const icon_width = @as(c_int, @intFromFloat(math.round(sprite_info.source_rect.width)));
+        const icon_height = @as(c_int, @intFromFloat(math.round(sprite_info.source_rect.height)));
         const icon_x = ui_padding;
         const icon_y = config.screen_height - ui_padding - icon_height;
 
