@@ -11,8 +11,8 @@ const ArrayList = std_full.ArrayList;
 const Allocator = std_full.mem.Allocator;
 const log = std_full.log;
 const atlas_manager = @import("atlas_manager.zig");
+const items = @import("items.zig");
 
-// Converts a TerrainType enum to its corresponding ray.Color.
 fn terrainToRaylibColor(terrain: types.TerrainType, is_overlay: bool) ray.Color {
     _ = is_overlay;
     return switch (terrain) {
@@ -152,6 +152,31 @@ fn drawEntityFromAtlas(entity: types.Entity, am: *const atlas_manager.AtlasManag
         }
     } else {
         log.warn("Could not determine SpriteId for entity type: {any}", .{entity.entity_type});
+    }
+}
+
+pub fn drawItems(world: *const types.GameWorld, am: *const atlas_manager.AtlasManager) void {
+    for (world.items.items) |item| {
+        // CORRECTED: Call getSpriteIdForItem via the AtlasManager struct
+        const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(item.item_type);
+        if (am.getSpriteInfo(sprite_id)) |sprite_info| {
+            const item_w = sprite_info.source_rect.width;
+            const item_h = sprite_info.source_rect.height;
+            const dest_x = @as(f32, @floatFromInt(item.x)) + 0.5 - (item_w / 2.0);
+            const dest_y = @as(f32, @floatFromInt(item.y)) + 0.5 - (item_h / 2.0);
+            const dest_pos = ray.Vector2{ .x = dest_x, .y = dest_y };
+            ray.drawTextureRec(am.atlas_texture, sprite_info.source_rect, dest_pos, ray.Color.white);
+        } else {
+            const fallback_color = switch (item.item_type) {
+                .Meat => ray.Color.red,
+                .BrushResource => ray.Color.yellow,
+                .Log => ray.Color.brown,
+                .RockItem => ray.Color.gray,
+                .CorpseSheep, .CorpseBear => ray.Color.dark_gray,
+            };
+            ray.drawPixel(item.x, item.y, fallback_color);
+            log.warn("SpriteInfo not found for item type {any}, drawing fallback pixel.", .{item.item_type});
+        }
     }
 }
 
@@ -324,19 +349,16 @@ pub fn drawDynamicElementsAndOverlays(
         }
     }
 
-    // Draw hover effect for ANY hovered entity that has a rect
     if (hovered_entity_idx) |h_idx| {
         if (h_idx < world.entities.items.len) {
             const entity = world.entities.items[h_idx];
             var metrics_for_hover: ?EntityMetrics = null;
-            // Find the pre-calculated metrics from the draw_list to avoid recalculating
             for (draw_list.items) |*item| {
                 if (item.entity_ptr != null and @intFromPtr(item.entity_ptr) == @intFromPtr(&world.entities.items[h_idx])) {
                     metrics_for_hover = item.metrics;
                     break;
                 }
             }
-            // Fallback if not found in draw_list (should be rare if list is up-to-date)
             if (metrics_for_hover == null) {
                 metrics_for_hover = getEntityMetrics(entity, atlas_manager_ptr);
             }
@@ -346,7 +368,6 @@ pub fn drawDynamicElementsAndOverlays(
                 if (camera_ptr.zoom != 0) {
                     line_thickness = 1.0 / camera_ptr.zoom;
                 }
-                // MODIFIED: Choose outline color based on entity type
                 const outline_color = switch (entity.entity_type) {
                     .Player, .Sheep, .Bear => config.ai_selection_outline_color,
                     .Tree, .RockCluster, .Brush => config.static_selection_outline_color,

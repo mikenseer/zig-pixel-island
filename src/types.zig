@@ -4,6 +4,7 @@ const std_full = @import("std");
 const config = @import("config.zig");
 const weather = @import("weather.zig");
 const art = @import("art.zig");
+const items = @import("items.zig");
 const log = std_full.log;
 
 const RandomInterface = std_full.Random;
@@ -48,6 +49,12 @@ pub const TerrainMovementRules = struct {
 pub const EntityAction = enum {
     Idle,
     Wandering,
+    SeekingFood,
+    Hunting,
+    Attacking,
+    Eating,
+    PickingUpItem,
+    Fleeing,
 };
 
 pub const Entity = struct {
@@ -60,23 +67,37 @@ pub const Entity = struct {
     time_to_next_growth: u16 = 0,
     move_cooldown_ticks: u16 = 0,
     current_action: EntityAction = .Idle,
+    current_action_timer: u16 = 0,
+    attack_cooldown: u16 = 0,
+    target_entity_idx: ?usize = null,
+    target_item_idx: ?usize = null,
     wander_target_x: i32 = 0,
     wander_target_y: i32 = 0,
     wander_steps_total: u8 = 0,
     wander_steps_taken: u8 = 0,
+    hp_decay_timer: u16 = 0,
+    inventory: [config.max_carry_slots]items.CarriedItemSlot,
+    processed_death_drops: bool = false,
 
     pub fn newPlayer(x_pos: i32, y_pos: i32) Entity {
-        return Entity{
+        var e = Entity{
             .x = x_pos,
             .y = y_pos,
             .entity_type = .Player,
-            .current_hp = 1,
-            .max_hp = 1,
+            .current_hp = config.peon_initial_hp,
+            .max_hp = config.peon_initial_hp,
+            .hp_decay_timer = config.hp_decay_interval,
+            .inventory = undefined,
+            .processed_death_drops = false,
         };
+        for (&e.inventory) |*slot| {
+            slot.* = .{};
+        }
+        return e;
     }
 
     pub fn newTree(x_pos: i32, y_pos: i32, initial_growth_stage: u8) Entity {
-        return Entity{
+        var e = Entity{
             .x = x_pos,
             .y = y_pos,
             .entity_type = .Tree,
@@ -84,48 +105,141 @@ pub const Entity = struct {
             .max_hp = config.default_tree_hp,
             .growth_stage = initial_growth_stage,
             .time_to_next_growth = if (initial_growth_stage < config.max_growth_stage_tree) config.tree_growth_interval else 0,
+            .inventory = undefined,
+            .processed_death_drops = false,
         };
+        for (&e.inventory) |*slot| {
+            slot.* = .{};
+        }
+        return e;
     }
 
     pub fn newRockCluster(x_pos: i32, y_pos: i32) Entity {
-        return Entity{
+        var e = Entity{
             .x = x_pos,
             .y = y_pos,
             .entity_type = .RockCluster,
             .current_hp = config.default_rock_cluster_hp,
             .max_hp = config.default_rock_cluster_hp,
+            .inventory = undefined,
+            .processed_death_drops = false,
         };
+        for (&e.inventory) |*slot| {
+            slot.* = .{};
+        }
+        return e;
     }
 
     pub fn newBrush(x_pos: i32, y_pos: i32) Entity {
-        return Entity{
+        var e = Entity{
             .x = x_pos,
             .y = y_pos,
             .entity_type = .Brush,
-            .current_hp = 10,
-            .max_hp = 10,
+            .current_hp = config.brush_initial_hp,
+            .max_hp = config.brush_initial_hp,
             .growth_stage = 1,
+            .inventory = undefined,
+            .processed_death_drops = false,
         };
+        for (&e.inventory) |*slot| {
+            slot.* = .{};
+        }
+        return e;
     }
 
     pub fn newSheep(x_pos: i32, y_pos: i32) Entity {
-        return Entity{
+        var e = Entity{
             .x = x_pos,
             .y = y_pos,
             .entity_type = .Sheep,
             .current_hp = config.sheep_hp,
             .max_hp = config.sheep_hp,
+            .hp_decay_timer = config.hp_decay_interval,
+            .inventory = undefined,
+            .processed_death_drops = false,
         };
+        for (&e.inventory) |*slot| {
+            slot.* = .{};
+        }
+        return e;
     }
 
     pub fn newBear(x_pos: i32, y_pos: i32) Entity {
-        return Entity{
+        var e = Entity{
             .x = x_pos,
             .y = y_pos,
             .entity_type = .Bear,
             .current_hp = config.bear_hp,
             .max_hp = config.bear_hp,
+            .hp_decay_timer = config.hp_decay_interval,
+            .inventory = undefined,
+            .processed_death_drops = false,
         };
+        for (&e.inventory) |*slot| {
+            slot.* = .{};
+        }
+        return e;
+    }
+
+    pub fn getFirstEmptyInventorySlot(self: *const Entity) ?usize {
+        for (self.inventory, 0..) |slot, i| {
+            if (slot.item_type == null) {
+                return i;
+            }
+        }
+        return null;
+    }
+
+    pub fn getFirstOccupiedInventorySlot(self: *const Entity, item_type_filter: ?items.ItemType) ?usize {
+        for (self.inventory, 0..) |slot, i| {
+            if (slot.item_type != null and slot.quantity > 0) {
+                if (item_type_filter == null or slot.item_type == item_type_filter) {
+                    return i;
+                }
+            }
+        }
+        return null;
+    }
+
+    pub fn addToInventory(self: *Entity, item_type: items.ItemType, quantity_to_add: u8) bool {
+        if (quantity_to_add == 0) return true;
+        for (&self.inventory) |*slot| {
+            if (slot.item_type == item_type) {
+                const can_add = config.max_item_stack_size - slot.quantity;
+                const add_amount = @min(quantity_to_add, can_add);
+                if (add_amount > 0) {
+                    slot.quantity += add_amount;
+                    if (add_amount == quantity_to_add) return true;
+                }
+            }
+        }
+        if (self.getFirstEmptyInventorySlot()) |empty_idx| {
+            self.inventory[empty_idx] = .{ .item_type = item_type, .quantity = quantity_to_add };
+            return true;
+        }
+        return false;
+    }
+
+    pub fn removeFromInventory(self: *Entity, slot_idx: usize, quantity_to_remove: u8) u8 {
+        if (slot_idx >= self.inventory.len or self.inventory[slot_idx].item_type == null or quantity_to_remove == 0) {
+            return 0;
+        }
+        const actual_remove_amount = @min(quantity_to_remove, self.inventory[slot_idx].quantity);
+        self.inventory[slot_idx].quantity -= actual_remove_amount;
+        if (self.inventory[slot_idx].quantity == 0) {
+            self.inventory[slot_idx].item_type = null;
+        }
+        return actual_remove_amount;
+    }
+
+    pub fn countInInventory(self: *const Entity, item_type: items.ItemType) u8 {
+        var count: u8 = 0;
+        for (self.inventory) |slot| {
+            if (slot.item_type == item_type) {
+                count += slot.quantity;
+            }
+        }
+        return count;
     }
 };
 
@@ -142,20 +256,16 @@ pub const Cloud = struct {
     speed_x: f32,
 };
 
+pub const WorldPos = struct { x: i32, y: i32 }; // Helper for coordinates
+
 pub const GameWorld = struct {
     width: u32,
     height: u32,
     tiles: []Tile,
     entities: std_full.ArrayList(Entity),
+    items: std_full.ArrayList(items.Item),
     allocator: std_full.mem.Allocator,
-    elevation_data: []f32 = &.{}, // Normalized elevation [0,1] for each tile
-
-    // Baked noise maps REMOVED:
-    // forest_density_map: []f32 = &.{},
-    // deforestation_map: []f32 = &.{},
-    // rockiness_map: []f32 = &.{},
-    // brushiness_map: []f32 = &.{},
-
+    elevation_data: []f32 = &.{},
     cloud_system: weather.CloudSystem = undefined,
 
     pub fn init(allocator_param: std_full.mem.Allocator, w: u32, h: u32, prng: *RandomInterface) !GameWorld {
@@ -169,25 +279,10 @@ pub const GameWorld = struct {
         const elevation_slice = try allocator_param.alloc(f32, num_tiles);
         errdefer allocator_param.free(elevation_slice);
 
-        // Baked noise map allocations REMOVED
-        // const forest_density_slice = try allocator_param.alloc(f32, num_tiles);
-        // errdefer allocator_param.free(forest_density_slice);
-        // const deforestation_slice = try allocator_param.alloc(f32, num_tiles);
-        // errdefer allocator_param.free(deforestation_slice);
-        // const rockiness_slice = try allocator_param.alloc(f32, num_tiles);
-        // errdefer allocator_param.free(rockiness_slice);
-        // const brushiness_slice = try allocator_param.alloc(f32, num_tiles);
-        // errdefer allocator_param.free(brushiness_slice);
-
         for (tile_slice) |*tile| {
             tile.* = Tile{ .base_terrain = .VeryDeepWater, .fertility = 128 };
         }
         @memset(elevation_slice, @as(f32, 0.0));
-        // Baked noise map memset REMOVED
-        // @memset(forest_density_slice, @as(f32, 0.0));
-        // @memset(deforestation_slice, @as(f32, 0.0));
-        // @memset(rockiness_slice, @as(f32, 0.0));
-        // @memset(brushiness_slice, @as(f32, 0.0));
 
         const cloud_sys = try weather.CloudSystem.init(w, h, allocator_param, prng);
 
@@ -196,13 +291,9 @@ pub const GameWorld = struct {
             .height = h,
             .tiles = tile_slice,
             .entities = std_full.ArrayList(Entity).init(allocator_param),
+            .items = std_full.ArrayList(items.Item).init(allocator_param),
             .allocator = allocator_param,
             .elevation_data = elevation_slice,
-            // Baked noise map fields REMOVED
-            // .forest_density_map = forest_density_slice,
-            // .deforestation_map = deforestation_slice,
-            // .rockiness_map = rockiness_slice,
-            // .brushiness_map = brushiness_slice,
             .cloud_system = cloud_sys,
         };
     }
@@ -210,21 +301,77 @@ pub const GameWorld = struct {
     pub fn deinit(self: *GameWorld) void {
         self.cloud_system.deinit();
         self.entities.deinit();
+        self.items.deinit();
         self.allocator.free(self.tiles);
         if (self.elevation_data.len > 0) self.allocator.free(self.elevation_data);
-        // Baked noise map deallocations REMOVED
-        // if (self.forest_density_map.len > 0) self.allocator.free(self.forest_density_map);
-        // if (self.deforestation_map.len > 0) self.allocator.free(self.deforestation_map);
-        // if (self.rockiness_map.len > 0) self.allocator.free(self.rockiness_map);
-        // if (self.brushiness_map.len > 0) self.allocator.free(self.brushiness_map);
-
         self.tiles = &.{};
         self.elevation_data = &.{};
-        // Baked noise map resets REMOVED
-        // self.forest_density_map = &.{};
-        // self.deforestation_map = &.{};
-        // self.rockiness_map = &.{};
-        // self.brushiness_map = &.{};
+    }
+
+    pub fn spawnItem(self: *GameWorld, item_type: items.ItemType, x_pos: i32, y_pos: i32) void {
+        const new_item = items.Item{
+            .x = x_pos,
+            .y = y_pos,
+            .item_type = item_type,
+            .hp = items.Item.getInitialHp(item_type),
+            .decay_timer = items.Item.getDecayRateTicks(item_type),
+        };
+        self.items.append(new_item) catch |err| {
+            log.err("Failed to spawn item {any} at {d},{d}: {s}", .{ item_type, x_pos, y_pos, @errorName(err) });
+        };
+    }
+
+    // NEW: Helper to find a random adjacent empty tile for item drops
+    pub fn findRandomAdjacentEmptyTile(
+        self: *const GameWorld,
+        center_x: i32,
+        center_y: i32,
+        max_attempts_per_spot: u32, // How many times to try finding an empty spot around the center
+        prng: *RandomInterface,
+    ) ?WorldPos {
+        // Define 8 adjacent offsets (including diagonals)
+        const offsets = [_]WorldPos{
+            .{ .x = -1, .y = -1 }, .{ .x = 0, .y = -1 }, .{ .x = 1, .y = -1 },
+            .{ .x = -1, .y = 0 },  .{ .x = 1, .y = 0 },  .{ .x = -1, .y = 1 },
+            .{ .x = 0, .y = 1 },   .{ .x = 1, .y = 1 },
+        };
+
+        // Shuffle offsets to try them in a random order
+        var shuffled_offsets = offsets; // Create a mutable copy
+        prng.shuffle(WorldPos, &shuffled_offsets); // Shuffle the offsets array
+
+        var attempts: u32 = 0;
+        while (attempts < max_attempts_per_spot and attempts < shuffled_offsets.len) {
+            const offset = shuffled_offsets[attempts];
+            const try_x = center_x + offset.x;
+            const try_y = center_y + offset.y;
+
+            // Check bounds
+            if (try_x < 0 or @as(u32, @intCast(try_x)) >= self.width or
+                try_y < 0 or @as(u32, @intCast(try_y)) >= self.height)
+            {
+                attempts += 1;
+                continue; // Out of bounds
+            }
+
+            // Check if tile is occupied by a static entity (trees, rocks, brush)
+            // We might also want to check if another *item* is already there if we want 1 item per tile.
+            // For now, just check static entities.
+            if (!self.isTileOccupiedByStaticEntity(try_x, try_y)) {
+                // Also check if terrain is passable for an item (e.g., not deep water)
+                if (self.getTile(try_x, try_y)) |tile| {
+                    switch (tile.base_terrain) {
+                        .VeryDeepWater, .DeepWater, .Mountain => { // Items shouldn't land in very deep water or on mountains
+                            attempts += 1;
+                            continue;
+                        },
+                        else => return WorldPos{ .x = try_x, .y = try_y },
+                    }
+                }
+            }
+            attempts += 1;
+        }
+        return null; // No suitable empty spot found
     }
 
     pub fn getTile(self: *const GameWorld, x: i32, y: i32) ?*const Tile {

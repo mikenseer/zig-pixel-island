@@ -1,5 +1,5 @@
 # Zig Pixel Island 
-<img src="https://ziglang.org/ziggy.svg" alt="Ziggy Mascot" width="300" valign="bottom">
+<img src="https://ziglang.org/ziggy.svg" alt="Ziggy Mascot" width="300" valign="bottom"> <--- this is Ziggy.
 
 Welcome to Zig Pixel Island, a 2D procedural world simulation and strategy game being built with the Zig programming language and the Raylib library! This project is a journey into game development with Zig, focusing on learning, performance, and creating a fun, emergent world.
 

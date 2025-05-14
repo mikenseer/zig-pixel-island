@@ -37,15 +37,15 @@ pub const brush_color_main: ray.Color = .{ .r = 180, .g = 160, .b = 40, .a = 255
 pub const brush_color_highlight: ray.Color = .{ .r = 210, .g = 190, .b = 90, .a = 255 };
 
 // --- UI Specific Colors & Styles ---
-pub const static_selection_outline_color: ray.Color = ray.Color.white; // White for Trees, Rocks, Brush
-pub const ai_selection_outline_color: ray.Color = ray.Color.lime; // Bright green for AI entities
+pub const static_selection_outline_color: ray.Color = ray.Color.white;
+pub const ai_selection_outline_color: ray.Color = ray.Color.lime;
 pub const ui_panel_background_color: ray.Color = .{ .r = 20, .g = 20, .b = 20, .a = 210 };
 pub const ui_panel_text_color: ray.Color = ray.Color.white;
 pub const ui_panel_padding: c_int = 8;
 pub const ui_panel_line_spacing: c_int = 14;
 pub const ui_panel_font_size: c_int = 10;
 pub const ui_panel_stat_value_color: ray.Color = ray.Color.gold;
-pub const ui_panel_mouse_offset_x: c_int = 15; // Offset panel from mouse cursor
+pub const ui_panel_mouse_offset_x: c_int = 15;
 pub const ui_panel_mouse_offset_y: c_int = 10;
 
 // --- Cloud Entity Settings ---
@@ -69,6 +69,9 @@ pub const num_sheep: u32 = 100;
 pub const num_bears: u32 = 10;
 pub const sheep_hp: i16 = 10;
 pub const bear_hp: i16 = 50;
+pub const peon_initial_hp: i16 = 100;
+pub const brush_initial_hp: i16 = 10;
+
 pub const animal_move_interval_base: u32 = 15;
 pub const peon_shallows_speed_modifier: f32 = 0.5;
 pub const bear_deep_water_speed_modifier: f32 = 0.5;
@@ -102,44 +105,35 @@ pub const grid_cell_size_deforestation: u32 = 80;
 pub const grid_cell_size_rock: u32 = 56;
 pub const grid_cell_size_brush: u32 = 40;
 
-// --- Noise Parameters (for world_gen and entity_spawner) ---
-// Terrain Shaping Noise
+// --- Noise Parameters ---
 pub const shape_octaves: u32 = 4;
 pub const shape_persistence: f32 = 0.45;
 pub const shape_lacunarity: f32 = 2.0;
 pub const shape_distortion_strength: f32 = 0.75;
-
 pub const land_elev_octaves: u32 = 5;
 pub const land_elev_persistence: f32 = 0.5;
 pub const land_elev_lacunarity: f32 = 2.0;
-
 pub const fine_detail_octaves: u32 = 3;
 pub const fine_detail_persistence: f32 = 0.4;
 pub const fine_detail_lacunarity: f32 = 2.0;
 pub const fine_detail_strength: f32 = 0.1;
-
-// Entity Spawning Related Noise
 pub const forest_core_octaves: u32 = 2;
 pub const forest_core_persistence: f32 = 0.50;
 pub const forest_core_lacunarity: f32 = 1.9;
 pub const forest_core_processing_power: f32 = 1.05;
-
 pub const deforestation_octaves: u32 = 3;
 pub const deforestation_persistence: f32 = 0.50;
 pub const deforestation_lacunarity: f32 = 2.0;
 pub const deforestation_processing_power: f32 = 1.2;
-
 pub const rock_octaves: u32 = 2;
 pub const rock_persistence: f32 = 0.45;
 pub const rock_lacunarity: f32 = 2.0;
-
 pub const brush_octaves: u32 = 3;
 pub const brush_persistence: f32 = 0.5;
 pub const brush_lacunarity: f32 = 2.0;
 pub const brush_deforestation_power_factor: f32 = 0.7;
 
-// --- Entity Spawning Probabilities & Thresholds (for entity_spawner.zig) ---
-// Tree Spawning
+// --- Entity Spawning Probabilities & Thresholds ---
 pub const grass_tree_base_probability: f32 = 0.45;
 pub const tree_density_threshold: f32 = 0.08;
 pub const tree_spawn_density_power: f32 = 1.05;
@@ -147,11 +141,8 @@ pub const max_tree_spawn_density_cap: f32 = 0.30;
 pub const tree_age_noise_offset: f32 = 0.05;
 pub const tree_age_random_spread: f32 = 1.0;
 pub const tree_age_range_radius: f32 = 0.4;
-
 pub const plains_tree_base_probability: f32 = 0.004;
 pub const plains_tree_core_threshold: f32 = 0.50;
-
-// Rock Spawning
 pub const mountain_rock_probability: f32 = 0.0;
 pub const mountain_rock_noise_thresh: f32 = 0.99;
 pub const plains_upper_edge_factor: f32 = 0.07;
@@ -165,8 +156,6 @@ pub const sand_rock_probability: f32 = 0.005;
 pub const sand_rock_noise_thresh: f32 = 0.60;
 pub const shallow_water_rock_probability: f32 = 0.001;
 pub const shallow_water_rock_noise_thresh: f32 = 0.66;
-
-// Brush Spawning
 pub const plains_brush_probability: f32 = 0.20;
 pub const plains_brush_noise_thresh: f32 = 0.45;
 pub const plains_near_sand_brush_noise_thresh: f32 = 0.70;
@@ -178,7 +167,6 @@ pub const grass_brush_sand_transition_factor: f32 = 0.035;
 pub const brush_sand_transition_prob_multiplier: f32 = 0.1;
 pub const sand_brush_probability: f32 = 0.03;
 pub const sand_brush_noise_thresh: f32 = 0.78;
-// Coastal Brush
 pub const coastal_grass_brush_max_dist_to_sand: u32 = 2;
 pub const coastal_grass_brush_probability: f32 = 0.55;
 pub const coastal_grass_brush_noise_thresh: f32 = 0.45;
@@ -201,3 +189,46 @@ pub const sapling_art_height = 5;
 pub const default_tree_hp: i16 = 100;
 pub const default_rock_cluster_hp: i16 = 150;
 pub const entity_offscreen_buffer: i32 = 64;
+
+// --- AI, Combat, Item, and Hunger Constants ---
+pub const hp_decay_interval: u16 = 300;
+pub const hp_decay_amount_peon: i16 = 1;
+pub const hp_decay_amount_animal: i16 = 2;
+pub const peon_hunger_threshold_percent: f32 = 0.50;
+pub const animal_hunger_threshold_percent: f32 = 0.60;
+pub const eating_duration_ticks: u16 = 60;
+pub const attack_cooldown_ticks: u16 = 60;
+pub const max_carry_slots: usize = 2;
+pub const max_item_stack_size: u8 = 1;
+pub const meat_initial_hp: i16 = 100;
+pub const meat_decay_rate_ticks: u16 = 120;
+pub const corpse_initial_hp: i16 = 50;
+pub const corpse_decay_rate_ticks: u16 = 180;
+pub const brush_resource_initial_hp: i16 = 20;
+pub const brush_resource_decay_rate_ticks: u16 = 600;
+pub const log_initial_hp: i16 = 200;
+pub const log_decay_rate_ticks: u16 = 1200;
+pub const rock_item_initial_hp: i16 = 1000;
+// CORRECTED: Changed type from u16 to u32 for rock_item_decay_rate_ticks
+pub const rock_item_decay_rate_ticks: u32 = 72000; // Effectively infinite for now
+
+// HP Gains from Food
+pub const meat_hp_gain_peon: i16 = 50;
+pub const meat_hp_gain_bear: i16 = 20;
+pub const brush_hp_gain_sheep: i16 = 30;
+
+// Combat Damage
+pub const peon_damage_vs_sheep: i16 = 3;
+pub const peon_damage_vs_bear: i16 = 5;
+pub const bear_damage_vs_peon: i16 = 20;
+pub const bear_damage_vs_sheep: i16 = 10;
+
+// Item Drop Quantities
+pub const meat_drops_from_sheep: u8 = 4;
+pub const meat_drops_from_bear: u8 = 8;
+
+// AI Sensing Radii (in tiles/pixels)
+pub const peon_food_sight_radius: f32 = 15.0;
+pub const peon_hunt_sight_radius: f32 = 20.0;
+pub const animal_food_sight_radius: f32 = 15.0;
+pub const animal_threat_sight_radius: f32 = 12.0;

@@ -26,6 +26,8 @@ const peon_ai = @import("peon_ai.zig");
 const ui = @import("ui.zig");
 const atlas_manager = @import("atlas_manager.zig");
 const animal_ai = @import("animal_ai.zig");
+const items = @import("items.zig");
+const combat = @import("combat.zig");
 
 // --- Game State ---
 var gpa = heap.GeneralPurposeAllocator(.{}){};
@@ -47,7 +49,7 @@ const min_zoom: f32 = 1.0;
 const max_zoom: f32 = @min(@as(f32, @floatFromInt(config.screen_width)), @as(f32, @floatFromInt(config.screen_height)));
 const zoom_speed_factor: f32 = 0.1;
 var hovered_entity_idx: ?usize = null;
-var current_mouse_screen_pos: ray.Vector2 = .{ .x = 0, .y = 0 }; // Store current mouse screen position
+var current_mouse_screen_pos: ray.Vector2 = .{ .x = 0, .y = 0 };
 
 // --- Rendering ---
 var static_world_texture: ray.RenderTexture2D = undefined;
@@ -153,7 +155,6 @@ fn updateAndDrawLoadingStatus(comptime status_fmt: []const u8, args: anytype) vo
     drawCurrentLoadingScreen(status_text_slice);
 }
 
-// Initializes all game systems.
 fn initGame(allocator: std_full.mem.Allocator) !void {
     updateAndDrawLoadingStatus("Loading Audio...", .{});
     ogg_file_data = ray.loadFileData("audio/zigisland.ogg") catch |err| {
@@ -182,7 +183,7 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
     log.info("Audio Initialized.", .{});
 
     updateAndDrawLoadingStatus("Setting up Game Systems...", .{});
-    ray.setTargetFPS(244);
+    ray.setTargetFPS(60);
 
     camera.target = .{ .x = @as(f32, @floatFromInt(config.screen_width)) / 2.0, .y = @as(f32, @floatFromInt(config.screen_height)) / 2.0 };
     camera.offset = .{ .x = @as(f32, @floatFromInt(config.screen_width)) / 2.0, .y = @as(f32, @floatFromInt(config.screen_height)) / 2.0 };
@@ -220,7 +221,6 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
     log.info("Initial Entities Spawned.", .{});
 }
 
-// Shuts down all game systems and frees resources.
 fn shutdownGame(allocator: std_full.mem.Allocator) void {
     _ = allocator;
     log.info("Shutting down game systems...", .{});
@@ -255,29 +255,103 @@ fn shutdownGame(allocator: std_full.mem.Allocator) void {
 fn updateGame(allocator: std_full.mem.Allocator) void {
     _ = allocator;
 
-    current_mouse_screen_pos = ray.getMousePosition(); // Update global mouse screen position
+    current_mouse_screen_pos = ray.getMousePosition();
     const mouse_world_pos = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
 
     peon_move_timer += 1;
     animal_move_timer += 1;
 
-    for (world.entities.items) |*entity| {
-        if (peon_move_timer >= config.peon_move_interval and entity.entity_type == .Player) {
-            peon_ai.updatePeon(entity, &world, &game_prng_iface);
+    // --- Entity Updates (AI, HP Decay, Death & Drops) ---
+    var i_entity: usize = 0;
+    while (i_entity < world.entities.items.len) {
+        var entity_ptr = &world.entities.items[i_entity];
+
+        // Apply HP Decay (only if alive at the start of this entity's update turn)
+        if (entity_ptr.current_hp > 0) {
+            if (entity_ptr.entity_type == .Player or entity_ptr.entity_type == .Sheep or entity_ptr.entity_type == .Bear) {
+                entity_ptr.hp_decay_timer -%= 1;
+                if (entity_ptr.hp_decay_timer == 0) {
+                    const decay_amount = switch (entity_ptr.entity_type) {
+                        .Player => config.hp_decay_amount_peon,
+                        else => config.hp_decay_amount_animal,
+                    };
+                    if (entity_ptr.current_hp > decay_amount) {
+                        entity_ptr.current_hp -= decay_amount;
+                    } else {
+                        entity_ptr.current_hp = 0;
+                    }
+                    entity_ptr.hp_decay_timer = config.hp_decay_interval;
+                }
+            }
+        }
+
+        // AI Updates: AI functions are now responsible for checking current_hp
+        // and handling their own death sequence (like dropping items) if hp is 0.
+        if (peon_move_timer >= config.peon_move_interval and entity_ptr.entity_type == .Player) {
+            peon_ai.updatePeon(entity_ptr, &world, &game_prng_iface);
         }
         if (animal_move_timer >= config.animal_move_interval_base) {
-            switch (entity.entity_type) {
-                .Sheep => animal_ai.updateSheep(entity, &world, &game_prng_iface),
-                .Bear => animal_ai.updateBear(entity, &world, &game_prng_iface),
+            switch (entity_ptr.entity_type) {
+                .Sheep => animal_ai.updateSheep(entity_ptr, &world, &game_prng_iface),
+                .Bear => animal_ai.updateBear(entity_ptr, &world, &game_prng_iface),
                 else => {},
             }
         }
+
+        // Check for death and remove entity AFTER AI has had a chance to process its death
+        if (entity_ptr.current_hp == 0) {
+            // AI should have already set processed_death_drops = true if it handled drops.
+            // If it's a player, log death.
+            if (entity_ptr.entity_type == .Player) {
+                log.info("Player has died and is being removed!", .{});
+            } else if (!entity_ptr.processed_death_drops and (entity_ptr.entity_type == .Sheep or entity_ptr.entity_type == .Bear)) {
+                // This case might catch deaths purely from decay where AI didn't run yet this tick to drop items.
+                // However, the AI functions are now designed to check HP at their start.
+                // This log indicates a potential logic gap if seen frequently for animals.
+                log.warn("{any} at {d},{d} died from decay before AI could process drops. Removing.", .{ entity_ptr.entity_type, entity_ptr.x, entity_ptr.y });
+            } else {
+                log.info("{any} at {d},{d} is being removed from world (HP is 0).", .{ entity_ptr.entity_type, entity_ptr.x, entity_ptr.y });
+            }
+
+            _ = world.entities.orderedRemove(i_entity);
+            if (hovered_entity_idx != null and hovered_entity_idx.? >= i_entity) {
+                if (hovered_entity_idx.? == i_entity) {
+                    hovered_entity_idx = null;
+                } else if (hovered_entity_idx.? > i_entity) {
+                    hovered_entity_idx.? -= 1;
+                }
+            }
+            continue;
+        }
+        i_entity += 1;
     }
+
     if (peon_move_timer >= config.peon_move_interval) {
         peon_move_timer = 0;
     }
     if (animal_move_timer >= config.animal_move_interval_base) {
         animal_move_timer = 0;
+    }
+
+    // --- Item Decay ---
+    var i_item: usize = 0;
+    while (i_item < world.items.items.len) {
+        var item = &world.items.items[i_item];
+        item.decay_timer -%= 1;
+        if (item.decay_timer == 0) {
+            if (item.hp > 1) {
+                item.hp -= 1;
+                item.decay_timer = items.Item.getDecayRateTicks(item.item_type);
+            } else {
+                item.hp = 0;
+            }
+        }
+        if (item.hp == 0) {
+            log.debug("Item {any} at {d},{d} decayed.", .{ item.item_type, item.x, item.y });
+            _ = world.items.orderedRemove(i_item);
+            continue;
+        }
+        i_item += 1;
     }
 
     world.cloud_system.update();
@@ -286,13 +360,15 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
     var i_hover: usize = world.entities.items.len;
     while (i_hover > 0) {
         const current_entity_idx = i_hover - 1;
-        const entity = world.entities.items[current_entity_idx];
-        if (atlas_manager_instance) |am_instance| {
-            const entity_metrics = rendering.getEntityMetrics(entity, &am_instance);
-            if (entity_metrics.rect) |rect| {
-                if (ray.checkCollisionPointRec(mouse_world_pos, rect)) {
-                    hovered_entity_idx = current_entity_idx;
-                    break;
+        if (current_entity_idx < world.entities.items.len) {
+            const entity = world.entities.items[current_entity_idx];
+            if (atlas_manager_instance) |am_instance| {
+                const entity_metrics = rendering.getEntityMetrics(entity, &am_instance);
+                if (entity_metrics.rect) |rect| {
+                    if (ray.checkCollisionPointRec(mouse_world_pos, rect)) {
+                        hovered_entity_idx = current_entity_idx;
+                        break;
+                    }
                 }
             }
         }
@@ -372,6 +448,10 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
     ray.drawTextureRec(static_world_texture.texture, src_rect, .{ .x = 0, .y = 0 }, ray.Color.white);
 
     if (atlas_manager_instance) |am_instance| {
+        rendering.drawItems(&world, &am_instance);
+    }
+
+    if (atlas_manager_instance) |am_instance| {
         rendering.drawDynamicElementsAndOverlays(&world, &camera, hovered_entity_idx, allocator, &am_instance, &drawable_entity_list);
     }
     ray.endMode2D();
@@ -387,7 +467,7 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
             is_music_muted,
             audio_stream_loaded,
             hovered_entity_idx,
-            current_mouse_screen_pos, // Pass current mouse screen position
+            current_mouse_screen_pos,
         );
     }
 }
