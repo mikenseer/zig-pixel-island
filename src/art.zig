@@ -8,22 +8,13 @@ const math = @import("std").math;
 const PixelColor = types_module.PixelColor;
 const N = null; // Transparent
 
-// Cloud base colors and alpha
-const CLOUD_BASE_COLOR = ray.Color{ .r = 220, .g = 225, .b = 230, .a = 255 };
-const CLOUD_HIGHLIGHT_COLOR = ray.Color{ .r = 250, .g = 250, .b = 255, .a = 255 };
-const CLOUD_SHADOW_COLOR = ray.Color{ .r = 180, .g = 185, .b = 190, .a = 255 };
-const MAX_CLOUD_ALPHA: u8 = 170;
-const MIN_CLOUD_ALPHA: u8 = 25;
-
-// --- Peon Art (1x2 pixels) ---
+// ... (Peon, Sheep, Bear, Tree art definitions remain the same) ...
 pub const peon_art_width: c_int = 1;
 pub const peon_art_height: c_int = config_module.player_height_pixels;
 pub const peon_pixels: [peon_art_height][peon_art_width]?PixelColor = .{
     .{config_module.player_pixel_1_color},
     .{config_module.player_pixel_2_color},
 };
-
-// --- Sheep Art (2h x 3w) ---
 pub const sheep_art_width: c_int = 3;
 pub const sheep_art_height: c_int = 2;
 const SHEEP_WHITE = ray.Color.white;
@@ -34,8 +25,6 @@ pub const sheep_pixels: [sheep_art_height][sheep_art_width]?PixelColor = .{
     .{ SHEEP_HEAD, SHEEP_WHITE, SHEEP_WHITE },
     .{ SHEEP_WHITE, SHEEP_WHITE, SHEEP_WHITE },
 };
-
-// --- Bear Art (3h x 4w) ---
 pub const bear_art_width: c_int = 4;
 pub const bear_art_height: c_int = 3;
 const BEAR_BODY_BROWN = ray.Color{ .r = 100, .g = 70, .b = 40, .a = 255 };
@@ -47,8 +36,6 @@ pub const bear_pixels: [bear_art_height][bear_art_width]?PixelColor = .{
     .{ BEAR_BODY_BROWN, BEAR_BODY_BROWN, BEAR_BODY_BROWN, BEAR_BODY_BROWN },
     .{ BEAR_BODY_BROWN, N, N, BEAR_BODY_BROWN },
 };
-
-// --- Tree Art ---
 pub const mature_tree_art_width: c_int = 5;
 pub const mature_tree_art_height: c_int = 10;
 pub const mature_tree_pixels: [mature_tree_art_height][mature_tree_art_width]?PixelColor = .{
@@ -63,7 +50,6 @@ pub const mature_tree_pixels: [mature_tree_art_height][mature_tree_art_width]?Pi
     .{ N, N, config_module.tree_trunk_color, N, N },
     .{ N, N, config_module.tree_trunk_color, N, N },
 };
-
 pub const small_tree_art_width: c_int = 3;
 pub const small_tree_art_height: c_int = 7;
 pub const small_tree_pixels: [small_tree_art_height][small_tree_art_width]?PixelColor = .{
@@ -75,7 +61,6 @@ pub const small_tree_pixels: [small_tree_art_height][small_tree_art_width]?Pixel
     .{ N, config_module.tree_trunk_color, N },
     .{ N, config_module.tree_trunk_color, N },
 };
-
 pub const sapling_art_width: c_int = config_module.sapling_art_width;
 pub const sapling_art_height: c_int = config_module.sapling_art_height;
 pub const sapling_pixels: [sapling_art_height][sapling_art_width]?PixelColor = .{
@@ -85,18 +70,15 @@ pub const sapling_pixels: [sapling_art_height][sapling_art_width]?PixelColor = .
     .{ N, config_module.tree_trunk_color, N },
     .{ N, config_module.tree_trunk_color, N },
 };
-
 pub const seedling_art_width: c_int = config_module.seedling_art_width;
 pub const seedling_art_height: c_int = config_module.seedling_art_height;
 pub const seedling_pixels: [seedling_art_height][seedling_art_width]?PixelColor = .{
     .{config_module.seedling_color},
     .{config_module.tree_trunk_color},
 };
-
 const R_B_local = config_module.rock_body_color;
 const R_H_local = config_module.rock_highlight_color;
 const R_S_local = config_module.rock_shadow_color;
-
 pub const basic_rock_cluster_pixels: [config_module.rock_cluster_art_height][config_module.rock_cluster_art_width]?PixelColor = .{
     .{ N, N, N, R_S_local, R_S_local, N },
     .{ N, N, R_S_local, R_B_local, R_H_local, R_S_local },
@@ -105,25 +87,21 @@ pub const basic_rock_cluster_pixels: [config_module.rock_cluster_art_height][con
     .{ N, R_S_local, R_B_local, R_S_local, R_B_local, R_S_local },
     .{ N, N, R_S_local, R_S_local, R_S_local, N },
 };
-
 const BR_M_local = config_module.brush_color_main;
 const BR_H_local = config_module.brush_color_highlight;
-
 pub const basic_brush_pixels: [config_module.brush_art_height][config_module.brush_art_width]?PixelColor = .{
     .{ N, BR_H_local, BR_M_local, BR_H_local, N },
     .{ BR_M_local, BR_H_local, BR_M_local, BR_M_local, BR_H_local },
 };
 
 // --- Item Art ---
-// MODIFIED: Meat Item (1x1 pixel)
 pub const meat_item_art_width: c_int = 1;
 pub const meat_item_art_height: c_int = 1;
-const MEAT_PINK = ray.Color{ .r = 255, .g = 105, .b = 180, .a = 255 }; // Hot Pink / Bright Pink
+const MEAT_PINK = ray.Color{ .r = 255, .g = 105, .b = 180, .a = 255 };
 pub const meat_item_pixels: [meat_item_art_height][meat_item_art_width]?PixelColor = .{
     .{MEAT_PINK},
 };
 
-// Brush Resource Item (e.g., 2x2 pixels)
 pub const brush_resource_item_art_width: c_int = 2;
 pub const brush_resource_item_art_height: c_int = 2;
 pub const brush_resource_item_pixels: [brush_resource_item_art_height][brush_resource_item_art_width]?PixelColor = .{
@@ -131,7 +109,7 @@ pub const brush_resource_item_pixels: [brush_resource_item_art_height][brush_res
     .{ BR_M_local, BR_H_local },
 };
 
-// Log Item (e.g., 3x1 pixels)
+// Log Item (e.g., 3x1 pixels) - Already defined
 pub const log_item_art_width: c_int = 3;
 pub const log_item_art_height: c_int = 1;
 const LOG_BROWN_DARK = config_module.tree_trunk_color;
@@ -140,7 +118,7 @@ pub const log_item_pixels: [log_item_art_height][log_item_art_width]?PixelColor 
     .{ LOG_BROWN_DARK, LOG_BROWN_LIGHT, LOG_BROWN_DARK },
 };
 
-// Rock Item (e.g., 2x2 pixels)
+// Rock Item (e.g., 2x2 pixels) - Already defined
 pub const rock_item_art_width: c_int = 2;
 pub const rock_item_art_height: c_int = 2;
 pub const rock_item_pixels: [rock_item_art_height][rock_item_art_width]?PixelColor = .{
@@ -148,7 +126,7 @@ pub const rock_item_pixels: [rock_item_art_height][rock_item_art_width]?PixelCol
     .{ R_B_local, R_H_local },
 };
 
-// Corpse Sheep Item (Upside down sheep, slightly grayed)
+// Corpse Sheep Item
 pub const corpse_sheep_item_art_width: c_int = sheep_art_width;
 pub const corpse_sheep_item_art_height: c_int = sheep_art_height;
 pub const corpse_sheep_item_pixels: [corpse_sheep_item_art_height][corpse_sheep_item_art_width]?PixelColor = .{
@@ -156,7 +134,7 @@ pub const corpse_sheep_item_pixels: [corpse_sheep_item_art_height][corpse_sheep_
     .{ SHEEP_HEAD_DARK_GRAY, SHEEP_BODY_LIGHT_GRAY, SHEEP_BODY_LIGHT_GRAY },
 };
 
-// Corpse Bear Item (Upside down bear, slightly grayed/darker)
+// Corpse Bear Item
 pub const corpse_bear_item_art_width: c_int = bear_art_width;
 pub const corpse_bear_item_art_height: c_int = bear_art_height;
 pub const corpse_bear_item_pixels: [corpse_bear_item_art_height][corpse_bear_item_art_width]?PixelColor = .{
@@ -165,9 +143,19 @@ pub const corpse_bear_item_pixels: [corpse_bear_item_art_height][corpse_bear_ite
     .{ BEAR_CORPSE_HEAD_BROWN, BEAR_CORPSE_BODY_BROWN, BEAR_CORPSE_BODY_BROWN, BEAR_CORPSE_BODY_BROWN },
 };
 
+// Grain Item Art (1x1 pixel, bright yellow)
+pub const grain_item_art_width: c_int = 1;
+pub const grain_item_art_height: c_int = 1;
+const GRAIN_YELLOW_BRIGHT = ray.Color{ .r = 255, .g = 215, .b = 0, .a = 255 };
+pub const grain_item_pixels: [grain_item_art_height][grain_item_art_width]?PixelColor = .{
+    .{GRAIN_YELLOW_BRIGHT},
+};
+
 // --- UI Icons ---
+// ... (UI Icons remain the same) ...
 pub const speaker_icon_width: c_int = 13;
 pub const speaker_icon_height: c_int = 13;
+// ... (rest of art.zig, including cloud art functions and definitions) ...
 const SPEAKER_W = ray.Color.white;
 const SPEAKER_B = ray.Color.black;
 const SPEAKER_R = ray.Color.red;
@@ -204,7 +192,12 @@ pub const speaker_muted_pixels: [speaker_icon_height][speaker_icon_width]?PixelC
     .{ SPEAKER_W, SPEAKER_W, SPEAKER_W, SPEAKER_W, SPEAKER_W, SPEAKER_W, SPEAKER_W, SPEAKER_W, SPEAKER_W, SPEAKER_W, SPEAKER_W, SPEAKER_W, SPEAKER_W },
 };
 
-// --- Cloud Art (Comptime procedural generation) ---
+const CLOUD_BASE_COLOR = ray.Color{ .r = 220, .g = 225, .b = 230, .a = 255 };
+const CLOUD_HIGHLIGHT_COLOR = ray.Color{ .r = 250, .g = 250, .b = 255, .a = 255 };
+const CLOUD_SHADOW_COLOR = ray.Color{ .r = 180, .g = 185, .b = 190, .a = 255 };
+const MAX_CLOUD_ALPHA: u8 = 170;
+const MIN_CLOUD_ALPHA: u8 = 25;
+
 fn comptime_rand(seed: *u32) u32 {
     seed.* = (seed.* *% 1664525 +% 1013904223);
     return seed.*;

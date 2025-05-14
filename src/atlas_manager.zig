@@ -23,15 +23,16 @@ pub const SpriteId = enum {
     SpeakerMuted,
     WoodIcon,
     RockIcon,
-    BrushItemIcon,
+    BrushItemIcon, // This was for the old BrushResource, might change to GrainIcon or remove
     Sheep,
     Bear,
     MeatItem,
-    BrushResourceItem,
+    BrushResourceItem, // Sprite for the dropped brush resource (might be replaced by GrainItem visually)
     LogItem,
     RockItem,
     CorpseSheepItem,
     CorpseBearItem,
+    GrainItem, // NEW
 };
 
 pub const SpriteInfo = struct {
@@ -39,7 +40,7 @@ pub const SpriteInfo = struct {
 };
 
 pub const AtlasManager = struct {
-    atlas_texture: ray.Texture2D, // This is ray.Texture, not ray.Texture2D in newer raylib-zig
+    atlas_texture: ray.Texture,
     sprite_map: std.HashMap(SpriteId, SpriteInfo, std.hash_map.AutoContext(SpriteId), std.hash_map.default_max_load_percentage),
 
     const ArtPieceMetadata = struct {
@@ -48,15 +49,15 @@ pub const AtlasManager = struct {
         height: c_int,
     };
 
-    // CORRECTED: Function is now fallible
     pub fn init(allocator: std.mem.Allocator) !AtlasManager {
         var self: AtlasManager = .{
-            .atlas_texture = undefined, // Will be loaded
+            .atlas_texture = undefined,
             .sprite_map = std.HashMap(SpriteId, SpriteInfo, std.hash_map.AutoContext(SpriteId), std.hash_map.default_max_load_percentage).init(allocator),
         };
-        errdefer self.sprite_map.deinit(); // Ensure map is deinitialized if init fails later
+        errdefer self.sprite_map.deinit();
 
         const art_pieces_meta = [_]ArtPieceMetadata{
+            // ... (other entities) ...
             .{ .id = .TreeSeedling, .width = config.seedling_art_width, .height = config.seedling_art_height },
             .{ .id = .TreeSapling, .width = config.sapling_art_width, .height = config.sapling_art_height },
             .{ .id = .TreeSmall, .width = art.small_tree_art_width, .height = art.small_tree_art_height },
@@ -71,15 +72,16 @@ pub const AtlasManager = struct {
             .{ .id = .SpeakerMuted, .width = art.speaker_icon_width, .height = art.speaker_icon_height },
             .{ .id = .WoodIcon, .width = art.log_item_art_width, .height = art.log_item_art_height },
             .{ .id = .RockIcon, .width = art.rock_item_art_width, .height = art.rock_item_art_height },
-            .{ .id = .BrushItemIcon, .width = art.brush_resource_item_art_width, .height = art.brush_resource_item_art_height },
+            .{ .id = .BrushItemIcon, .width = art.grain_item_art_width, .height = art.grain_item_art_height }, // CHANGED: Brush icon now uses Grain art
             .{ .id = .Sheep, .width = art.sheep_art_width, .height = art.sheep_art_height },
             .{ .id = .Bear, .width = art.bear_art_width, .height = art.bear_art_height },
             .{ .id = .MeatItem, .width = art.meat_item_art_width, .height = art.meat_item_art_height },
-            .{ .id = .BrushResourceItem, .width = art.brush_resource_item_art_width, .height = art.brush_resource_item_art_height },
+            .{ .id = .BrushResourceItem, .width = art.brush_resource_item_art_width, .height = art.brush_resource_item_art_height }, // Kept for now, but Grain is primary
             .{ .id = .LogItem, .width = art.log_item_art_width, .height = art.log_item_art_height },
             .{ .id = .RockItem, .width = art.rock_item_art_width, .height = art.rock_item_art_height },
             .{ .id = .CorpseSheepItem, .width = art.corpse_sheep_item_art_width, .height = art.corpse_sheep_item_art_height },
             .{ .id = .CorpseBearItem, .width = art.corpse_bear_item_art_width, .height = art.corpse_bear_item_art_height },
+            .{ .id = .GrainItem, .width = art.grain_item_art_width, .height = art.grain_item_art_height }, // NEW
         };
 
         const atlas_width_cint: c_int = 1024;
@@ -120,19 +122,14 @@ pub const AtlasManager = struct {
                 max_row_height = piece_meta.height;
             }
         }
-        // CORRECTED: Use try to handle potential error from loadTextureFromImage
         self.atlas_texture = try ray.loadTextureFromImage(atlas_image);
-        // The check for self.atlas_texture.id == 0 is still good practice for raylib C API,
-        // but raylib-zig's `try` handles the error union for Zig.
-        // If `loadTextureFromImage` itself doesn't return an error union in your raylib-zig version,
-        // then the `try` isn't strictly needed and the original direct assignment was fine,
-        // but the error message indicates it *is* an error union.
         log.info("Texture atlas generated successfully.", .{});
         return self;
     }
 
     fn copyArtToAtlas(image: *ray.Image, dest_x: c_int, dest_y: c_int, piece_meta: ArtPieceMetadata) void {
         switch (piece_meta.id) {
+            // ... (other cases) ...
             .TreeSeedling => drawSpecificArt(image, dest_x, dest_y, config.seedling_art_height, config.seedling_art_width, art.seedling_pixels),
             .TreeSapling => drawSpecificArt(image, dest_x, dest_y, config.sapling_art_height, config.sapling_art_width, art.sapling_pixels),
             .TreeSmall => drawSpecificArt(image, dest_x, dest_y, art.small_tree_art_height, art.small_tree_art_width, art.small_tree_pixels),
@@ -147,7 +144,7 @@ pub const AtlasManager = struct {
             .SpeakerMuted => drawSpecificArt(image, dest_x, dest_y, art.speaker_icon_height, art.speaker_icon_width, art.speaker_muted_pixels),
             .WoodIcon => drawSpecificArt(image, dest_x, dest_y, art.log_item_art_height, art.log_item_art_width, art.log_item_pixels),
             .RockIcon => drawSpecificArt(image, dest_x, dest_y, art.rock_item_art_height, art.rock_item_art_width, art.rock_item_pixels),
-            .BrushItemIcon => drawSpecificArt(image, dest_x, dest_y, art.brush_resource_item_art_height, art.brush_resource_item_art_width, art.brush_resource_item_pixels),
+            .BrushItemIcon => drawSpecificArt(image, dest_x, dest_y, art.grain_item_art_height, art.grain_item_art_width, art.grain_item_pixels), // CHANGED
             .Sheep => drawSpecificArt(image, dest_x, dest_y, art.sheep_art_height, art.sheep_art_width, art.sheep_pixels),
             .Bear => drawSpecificArt(image, dest_x, dest_y, art.bear_art_height, art.bear_art_width, art.bear_pixels),
             .MeatItem => drawSpecificArt(image, dest_x, dest_y, art.meat_item_art_height, art.meat_item_art_width, art.meat_item_pixels),
@@ -156,6 +153,7 @@ pub const AtlasManager = struct {
             .RockItem => drawSpecificArt(image, dest_x, dest_y, art.rock_item_art_height, art.rock_item_art_width, art.rock_item_pixels),
             .CorpseSheepItem => drawSpecificArt(image, dest_x, dest_y, art.corpse_sheep_item_art_height, art.corpse_sheep_item_art_width, art.corpse_sheep_item_pixels),
             .CorpseBearItem => drawSpecificArt(image, dest_x, dest_y, art.corpse_bear_item_art_height, art.corpse_bear_item_art_width, art.corpse_bear_item_pixels),
+            .GrainItem => drawSpecificArt(image, dest_x, dest_y, art.grain_item_art_height, art.grain_item_art_width, art.grain_item_pixels), // NEW
         }
     }
 
@@ -191,11 +189,12 @@ pub const AtlasManager = struct {
     pub fn getSpriteIdForItem(item_type: items.ItemType) SpriteId {
         return switch (item_type) {
             .Meat => .MeatItem,
-            .BrushResource => .BrushResourceItem,
+            .BrushResource => .BrushResourceItem, // This will likely be replaced by GrainItem for rendering
             .Log => .LogItem,
             .RockItem => .RockItem,
             .CorpseSheep => .CorpseSheepItem,
             .CorpseBear => .CorpseBearItem,
+            .Grain => .GrainItem, // NEW
         };
     }
 };

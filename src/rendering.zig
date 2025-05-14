@@ -13,6 +13,7 @@ const log = std_full.log;
 const atlas_manager = @import("atlas_manager.zig");
 const items = @import("items.zig");
 
+// ... (terrainToRaylibColor, EntityMetrics, getEntityMetrics, redrawStaticWorldTexture, drawEntityFromAtlas, drawItems, DrawableEntity, DrawLayer, lessThanDrawableEntities remain the same) ...
 fn terrainToRaylibColor(terrain: types.TerrainType, is_overlay: bool) ray.Color {
     _ = is_overlay;
     return switch (terrain) {
@@ -157,7 +158,6 @@ fn drawEntityFromAtlas(entity: types.Entity, am: *const atlas_manager.AtlasManag
 
 pub fn drawItems(world: *const types.GameWorld, am: *const atlas_manager.AtlasManager) void {
     for (world.items.items) |item| {
-        // CORRECTED: Call getSpriteIdForItem via the AtlasManager struct
         const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(item.item_type);
         if (am.getSpriteInfo(sprite_id)) |sprite_info| {
             const item_w = sprite_info.source_rect.width;
@@ -173,9 +173,55 @@ pub fn drawItems(world: *const types.GameWorld, am: *const atlas_manager.AtlasMa
                 .Log => ray.Color.brown,
                 .RockItem => ray.Color.gray,
                 .CorpseSheep, .CorpseBear => ray.Color.dark_gray,
+                .Grain => ray.Color.gold,
             };
             ray.drawPixel(item.x, item.y, fallback_color);
             log.warn("SpriteInfo not found for item type {any}, drawing fallback pixel.", .{item.item_type});
+        }
+    }
+}
+
+// NEW: Function to draw items carried by entities
+pub fn drawCarriedItems(world: *const types.GameWorld, am: *const atlas_manager.AtlasManager) void {
+    for (world.entities.items) |entity| {
+        // Check only the first inventory slot for now, as per current design (1 item carried)
+        if (entity.inventory[0].item_type) |carried_item_type| {
+            if (entity.inventory[0].quantity > 0) {
+                const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(carried_item_type);
+                if (am.getSpriteInfo(sprite_id)) |sprite_info| {
+                    // Determine position below the "head"
+                    // This requires knowing the entity's art and where its "head" is.
+                    // This is a simplified positioning.
+                    var item_offset_x: f32 = 0.0;
+                    var item_offset_y: f32 = 0.0;
+
+                    // Get entity metrics to know its drawing rectangle
+                    const metrics = getEntityMetrics(entity, am);
+
+                    switch (entity.entity_type) {
+                        .Player => { // 1x2, head is top pixel (y), item below means y + 1
+                            item_offset_x = metrics.rect.?.x; // Align with entity's x
+                            item_offset_y = metrics.rect.?.y + @as(f32, @floatFromInt(art.peon_art_height)); // Below the entity sprite
+                        },
+                        .Sheep => { // 3wx2h, head is top row. Item below head means y + 1 (world coords)
+                            // Assuming sheep sprite anchor is bottom-center (metrics.anchor_y_factor = 1.0)
+                            // metrics.rect.y is the top of the sprite. Head is at metrics.rect.y.
+                            // Item below head is at metrics.rect.y + 1 (pixel below head row)
+                            // Centered horizontally with the sheep
+                            item_offset_x = metrics.rect.?.x + (@as(f32, @floatFromInt(art.sheep_art_width)) / 2.0) - (sprite_info.source_rect.width / 2.0);
+                            item_offset_y = metrics.rect.?.y + 1.0; // One pixel below the top row of sheep art
+                        },
+                        .Bear => { // 4wx3h, head is top row.
+                            item_offset_x = metrics.rect.?.x + (@as(f32, @floatFromInt(art.bear_art_width)) / 2.0) - (sprite_info.source_rect.width / 2.0);
+                            item_offset_y = metrics.rect.?.y + 1.0; // One pixel below the top row of bear art
+                        },
+                        else => continue, // Only draw for these types for now
+                    }
+
+                    const dest_pos = ray.Vector2{ .x = item_offset_x, .y = item_offset_y };
+                    ray.drawTextureRec(am.atlas_texture, sprite_info.source_rect, dest_pos, ray.Color.white);
+                }
+            }
         }
     }
 }

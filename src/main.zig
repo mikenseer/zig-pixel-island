@@ -58,7 +58,7 @@ var static_world_needs_redraw: bool = true;
 // --- Resources ---
 var collected_wood: u32 = 0;
 var collected_rocks: u32 = 0;
-var collected_brush_items: u32 = 0;
+var collected_brush_items: u32 = 0; // This will now effectively be "collected_grain" via player action
 
 // --- Audio ---
 var ogg_file_data: []u8 = undefined;
@@ -261,12 +261,10 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
     peon_move_timer += 1;
     animal_move_timer += 1;
 
-    // --- Entity Updates (AI, HP Decay, Death & Drops) ---
     var i_entity: usize = 0;
     while (i_entity < world.entities.items.len) {
         var entity_ptr = &world.entities.items[i_entity];
 
-        // Apply HP Decay (only if alive at the start of this entity's update turn)
         if (entity_ptr.current_hp > 0) {
             if (entity_ptr.entity_type == .Player or entity_ptr.entity_type == .Sheep or entity_ptr.entity_type == .Bear) {
                 entity_ptr.hp_decay_timer -%= 1;
@@ -285,8 +283,6 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
             }
         }
 
-        // AI Updates: AI functions are now responsible for checking current_hp
-        // and handling their own death sequence (like dropping items) if hp is 0.
         if (peon_move_timer >= config.peon_move_interval and entity_ptr.entity_type == .Player) {
             peon_ai.updatePeon(entity_ptr, &world, &game_prng_iface);
         }
@@ -298,21 +294,34 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
             }
         }
 
-        // Check for death and remove entity AFTER AI has had a chance to process its death
         if (entity_ptr.current_hp == 0) {
-            // AI should have already set processed_death_drops = true if it handled drops.
-            // If it's a player, log death.
-            if (entity_ptr.entity_type == .Player) {
-                log.info("Player has died and is being removed!", .{});
-            } else if (!entity_ptr.processed_death_drops and (entity_ptr.entity_type == .Sheep or entity_ptr.entity_type == .Bear)) {
-                // This case might catch deaths purely from decay where AI didn't run yet this tick to drop items.
-                // However, the AI functions are now designed to check HP at their start.
-                // This log indicates a potential logic gap if seen frequently for animals.
-                log.warn("{any} at {d},{d} died from decay before AI could process drops. Removing.", .{ entity_ptr.entity_type, entity_ptr.x, entity_ptr.y });
-            } else {
-                log.info("{any} at {d},{d} is being removed from world (HP is 0).", .{ entity_ptr.entity_type, entity_ptr.x, entity_ptr.y });
+            if (!entity_ptr.processed_death_drops) {
+                log.debug("{any} at {d},{d} died. Processing general drops.", .{ entity_ptr.entity_type, entity_ptr.x, entity_ptr.y });
+                // This is a fallback for entities that might die from non-AI actions (e.g. direct player click)
+                // or if AI somehow fails to set processed_death_drops.
+                // AI functions are now primarily responsible for their specific drops.
+                switch (entity_ptr.entity_type) {
+                    .Brush => { // Brush destroyed by player click or other non-AI means
+                        var g: u8 = 0;
+                        while (g < config.grain_drops_from_brush) : (g += 1) {
+                            if (world.findRandomAdjacentEmptyTile(entity_ptr.x, entity_ptr.y, 8, &game_prng_iface)) |drop_pos| {
+                                world.spawnItem(.Grain, drop_pos.x, drop_pos.y);
+                            } else {
+                                world.spawnItem(.Grain, entity_ptr.x, entity_ptr.y);
+                            }
+                        }
+                    },
+                    // Animal drops are handled by their AI, Player drops are TBD
+                    .Player => log.info("Player has died!", .{}),
+                    .Tree, .RockCluster, .Sheep, .Bear => {
+                        // Sheep/Bear AI should have handled this.
+                        // Tree/RockCluster drops are via player click for now.
+                    },
+                }
+                entity_ptr.processed_death_drops = true;
             }
 
+            log.info("{any} at {d},{d} is being removed from world (HP is 0).", .{ entity_ptr.entity_type, entity_ptr.x, entity_ptr.y });
             _ = world.entities.orderedRemove(i_entity);
             if (hovered_entity_idx != null and hovered_entity_idx.? >= i_entity) {
                 if (hovered_entity_idx.? == i_entity) {
@@ -333,7 +342,6 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         animal_move_timer = 0;
     }
 
-    // --- Item Decay ---
     var i_item: usize = 0;
     while (i_item < world.items.items.len) {
         var item = &world.items.items[i_item];
@@ -400,24 +408,24 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         if (!ui_interacted_this_click and hovered_entity_idx != null) {
             if (hovered_entity_idx) |entity_idx_to_collect| {
                 if (entity_idx_to_collect < world.entities.items.len) {
-                    const entity_to_collect = world.entities.items[entity_idx_to_collect];
-                    var collected_this_frame = false;
-                    switch (entity_to_collect.entity_type) {
-                        .Tree, .RockCluster, .Brush => {
-                            if (entity_to_collect.entity_type == .Tree) {
-                                collected_wood += 1;
-                            } else if (entity_to_collect.entity_type == .RockCluster) {
-                                collected_rocks += 1;
-                            } else if (entity_to_collect.entity_type == .Brush) {
-                                collected_brush_items += 1;
-                            }
-                            _ = world.entities.orderedRemove(entity_idx_to_collect);
-                            collected_this_frame = true;
+                    var entity_to_interact = &world.entities.items[entity_idx_to_collect];
+
+                    switch (entity_to_interact.entity_type) {
+                        .Tree => {
+                            collected_wood += 1;
+                            entity_to_interact.current_hp = 0;
+                        },
+                        .RockCluster => {
+                            collected_rocks += 1;
+                            entity_to_interact.current_hp = 0;
+                        },
+                        .Brush => {
+                            // Player click now "kills" the brush, which will then drop grain
+                            entity_to_interact.current_hp = 0;
+                            // The collected_brush_items counter will not increment here directly.
+                            // If players should get grain from clicking brush, that needs separate pickup logic.
                         },
                         .Player, .Sheep, .Bear => {},
-                    }
-                    if (collected_this_frame) {
-                        hovered_entity_idx = null;
                     }
                 } else {
                     hovered_entity_idx = null;
@@ -449,6 +457,8 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
 
     if (atlas_manager_instance) |am_instance| {
         rendering.drawItems(&world, &am_instance);
+        // NEW: Call function to draw carried items
+        rendering.drawCarriedItems(&world, &am_instance);
     }
 
     if (atlas_manager_instance) |am_instance| {
