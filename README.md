@@ -1,4 +1,5 @@
-# Zig Pixel Island <img src="https://ziglang.org/ziggy.svg" alt="Ziggy Mascot" width="50" valign="bottom">
+# Zig Pixel Island 
+<img src="https://ziglang.org/ziggy.svg" alt="Ziggy Mascot" width="300" valign="bottom">
 
 Welcome to Zig Pixel Island, a 2D procedural world simulation and strategy game being built with the Zig programming language and the Raylib library! This project is a journey into game development with Zig, focusing on learning, performance, and creating a fun, emergent world.
 
@@ -14,13 +15,14 @@ The core inspiration for Zig Pixel Island comes from a blend of several ideas:
 
 ## Screenshots
 
-![Screenshot of Zig Pixel Island](images/screenshot1.png)
+![Screenshot of Zig Pixel Island](art/screenshot1.png)
 
-![Screenshot of Zig Pixel Island Zoomed In On AI Entities](images/screenshot2.png)
+![Screenshot of Zig Pixel Island Zoomed In On AI Entities](art/screenshot2.png)
 
-![Screenshot of Zig Pixel Island Gameplay Stats UI](images/screenshot3.png)
+![Screenshot of Zig Pixel Island Gameplay Stats UI](art/screenshot3.png)
 
-## Why Zig? <img src="https://ziglang.org/favicon.ico" alt="Zig Language Logo" width="30" valign="bottom">
+## Why Zig? 
+<img src="https://ziglang.org/favicon.ico" alt="Zig Language Logo" width="200" valign="bottom">
 
 So, why Zig for this game? Here's the lowdown:
 
