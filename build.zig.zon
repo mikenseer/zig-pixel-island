@@ -1,0 +1,21 @@
+.{
+    .name = .zig_pixel_island,
+
+    .version = "0.0.0",
+
+    .fingerprint = 0x82651d6c911c4c86,
+    .minimum_zig_version = "0.14.0",
+
+    .dependencies = .{
+        .raylibzig = .{
+            .url = "https://github.com/Not-Nik/raylib-zig/archive/devel.tar.gz",
+            .hash = "raylib_zig-5.6.0-dev-KE8REKAqBQAQugfCOjYYVRFOi7iaEJK1EMDcRUq8AOm2",
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
