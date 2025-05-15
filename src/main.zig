@@ -42,6 +42,8 @@ var atlas_manager_instance: ?atlas_manager.AtlasManager = null;
 var drawable_entity_list: ArrayList(rendering.DrawableEntity) = undefined;
 var ziggy_logo_texture: ?ray.Texture2D = null;
 var is_game_paused: bool = false;
+const base_target_fps: c_int = 60;
+var game_speed_multiplier: f32 = 1.0;
 
 // --- Camera & Input ---
 var camera = ray.Camera2D{
@@ -56,17 +58,12 @@ const zoom_speed_factor: f32 = 0.1;
 var hovered_entity_idx: ?usize = null;
 var hovered_item_idx: ?usize = null;
 var current_mouse_screen_pos: ray.Vector2 = .{ .x = 0, .y = 0 };
-var followed_entity_idx: ?usize = null; // NEW: For camera follow
-var followed_item_idx: ?usize = null; // NEW: For camera follow
+var followed_entity_idx: ?usize = null;
+var followed_item_idx: ?usize = null;
 
 // --- Rendering ---
 var static_world_texture: ray.RenderTexture2D = undefined;
 var static_world_needs_redraw: bool = true;
-
-// REMOVED: Resource Counters
-// var collected_wood: u32 = 0;
-// var collected_rocks: u32 = 0;
-// var collected_brush_items: u32 = 0;
 
 // --- Audio ---
 var ogg_file_data: []u8 = undefined;
@@ -214,7 +211,7 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
         log.warn("OGG file data not loaded. Audio will be disabled.", .{});
     }
     updateAndDrawLoadingStatus("Setting up Game Systems...", .{});
-    ray.setTargetFPS(60);
+    ray.setTargetFPS(base_target_fps);
 
     camera.target = .{ .x = @as(f32, @floatFromInt(config.screen_width)) / 2.0, .y = @as(f32, @floatFromInt(config.screen_height)) / 2.0 };
     camera.offset = .{ .x = @as(f32, @floatFromInt(config.screen_width)) / 2.0, .y = @as(f32, @floatFromInt(config.screen_height)) / 2.0 };
@@ -297,6 +294,31 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         log.info("Game Paused: {any}", .{is_game_paused});
     }
 
+    var new_target_fps: c_int = base_target_fps; // Start with current target
+    var speed_changed = false;
+
+    if (ray.isKeyPressed(ray.KeyboardKey.one)) {
+        game_speed_multiplier = 0.25;
+        is_game_paused = false;
+        speed_changed = true;
+    }
+    if (ray.isKeyPressed(ray.KeyboardKey.two)) {
+        game_speed_multiplier = 0.5;
+        is_game_paused = false;
+        speed_changed = true;
+    }
+    if (ray.isKeyPressed(ray.KeyboardKey.three)) {
+        game_speed_multiplier = 1.0;
+        is_game_paused = false;
+        speed_changed = true;
+    }
+
+    if (speed_changed) {
+        new_target_fps = @max(15, @as(c_int, @intFromFloat(math.round(@as(f32, @floatFromInt(base_target_fps)) * game_speed_multiplier))));
+        ray.setTargetFPS(new_target_fps);
+        log.info("Game Speed: x{d:.2} (Target FPS: {d})", .{ game_speed_multiplier, new_target_fps });
+    }
+
     current_mouse_screen_pos = ray.getMousePosition();
     const mouse_world_pos = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
 
@@ -321,7 +343,6 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
                         hovered_entity_idx = null;
                     } else if (h_idx > i_entity) hovered_entity_idx.? -= 1;
                 }
-                // If an entity is removed, also clear follow if it was the followed entity
                 if (followed_entity_idx != null and followed_entity_idx.? == i_entity) {
                     followed_entity_idx = null;
                 } else if (followed_entity_idx != null and followed_entity_idx.? > i_entity) {
@@ -351,7 +372,6 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
                         hovered_item_idx = null;
                     } else if (h_idx_item > i_item) hovered_item_idx.? -= 1;
                 }
-                // If an item is removed, also clear follow if it was the followed item
                 if (followed_item_idx != null and followed_item_idx.? == i_item) {
                     followed_item_idx = null;
                 } else if (followed_item_idx != null and followed_item_idx.? > i_item) {
@@ -364,7 +384,6 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         world.cloud_system.update();
     }
 
-    // Hover detection (even if paused)
     hovered_entity_idx = null;
     hovered_item_idx = null;
 
@@ -386,7 +405,7 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         i_hover_entity -= 1;
     }
 
-    if (hovered_entity_idx == null) { // Only check for item hover if no entity is hovered
+    if (hovered_entity_idx == null) {
         var i_hover_item: usize = world.items.items.len;
         while (i_hover_item > 0) {
             const current_item_idx = i_hover_item - 1;
@@ -405,27 +424,21 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         }
     }
 
-    // Camera Zoom and Pan (always active)
     const wheel_move = ray.getMouseWheelMove();
     if (wheel_move != 0) {
         const mouse_world_pos_before_zoom = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
         camera.zoom += wheel_move * camera.zoom * zoom_speed_factor;
         camera.zoom = math.clamp(camera.zoom, min_zoom, max_zoom);
         const mouse_world_pos_after_zoom = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
-        // Adjust target to keep mouse pointer over the same world position after zoom
         camera.target.x += mouse_world_pos_before_zoom.x - mouse_world_pos_after_zoom.x;
         camera.target.y += mouse_world_pos_before_zoom.y - mouse_world_pos_after_zoom.y;
-        // If following something, zooming shouldn't break the follow, target will be reset below.
     }
-    if (ray.isMouseButtonDown(ray.MouseButton.middle)) {
+    if (followed_entity_idx == null and followed_item_idx == null and ray.isMouseButtonDown(ray.MouseButton.middle)) {
         const delta = ray.getMouseDelta();
         camera.target.x -= delta.x / camera.zoom;
         camera.target.y -= delta.y / camera.zoom;
-        followed_entity_idx = null; // Panning breaks follow
-        followed_item_idx = null;
     }
 
-    // Left Click Logic (Follow or Unfollow)
     if (ray.isMouseButtonPressed(ray.MouseButton.left)) {
         var ui_interacted_this_click = false;
         if (atlas_manager_instance) |am_instance| {
@@ -440,64 +453,63 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
 
         if (!ui_interacted_this_click) {
             if (hovered_entity_idx) |h_idx| {
-                log.debug("Clicked to follow entity: {d}", .{h_idx});
-                followed_entity_idx = h_idx;
-                followed_item_idx = null;
+                if (followed_entity_idx != null and followed_entity_idx.? == h_idx) {
+                    followed_entity_idx = null;
+                } else {
+                    followed_entity_idx = h_idx;
+                    followed_item_idx = null;
+                }
             } else if (hovered_item_idx) |h_item_idx| {
-                log.debug("Clicked to follow item: {d}", .{h_item_idx});
-                followed_item_idx = h_item_idx;
-                followed_entity_idx = null;
-            } else { // Clicked on empty space
-                log.debug("Clicked on empty space, unfollowing.", .{});
+                if (followed_item_idx != null and followed_item_idx.? == h_item_idx) {
+                    followed_item_idx = null;
+                } else {
+                    followed_item_idx = h_item_idx;
+                    followed_entity_idx = null;
+                }
+            } else {
                 followed_entity_idx = null;
                 followed_item_idx = null;
             }
         }
     }
 
-    // Update Camera Target if Following
-    if (!is_game_paused) { // Camera follow updates only if not paused, otherwise pan is king
-        if (followed_entity_idx) |idx| {
-            if (idx < world.entities.items.len) { // Ensure entity still exists
-                const entity_to_follow = world.entities.items[idx];
-                // Center on entity. Adjust if you want a different part of entity.
-                if (atlas_manager_instance) |am| {
-                    const metrics = rendering.getEntityMetrics(entity_to_follow, &am);
-                    if (metrics.rect) |rect| {
-                        camera.target.x = rect.x + rect.width / 2.0;
-                        camera.target.y = rect.y + rect.height / 2.0;
-                    } else { // Fallback to entity x,y if no rect
-                        camera.target.x = @as(f32, @floatFromInt(entity_to_follow.x));
-                        camera.target.y = @as(f32, @floatFromInt(entity_to_follow.y));
-                    }
+    if (followed_entity_idx) |idx| {
+        if (idx < world.entities.items.len) {
+            const entity_to_follow = world.entities.items[idx];
+            if (atlas_manager_instance) |am| {
+                const metrics = rendering.getEntityMetrics(entity_to_follow, &am);
+                if (metrics.rect) |rect| {
+                    camera.target.x = rect.x + rect.width / 2.0;
+                    camera.target.y = rect.y + rect.height / 2.0;
                 } else {
                     camera.target.x = @as(f32, @floatFromInt(entity_to_follow.x));
                     camera.target.y = @as(f32, @floatFromInt(entity_to_follow.y));
                 }
             } else {
-                followed_entity_idx = null; // Followed entity no longer exists
+                camera.target.x = @as(f32, @floatFromInt(entity_to_follow.x));
+                camera.target.y = @as(f32, @floatFromInt(entity_to_follow.y));
             }
-        } else if (followed_item_idx) |idx| {
-            if (idx < world.items.items.len) { // Ensure item still exists
-                const item_to_follow = world.items.items[idx];
-                // Center on item (items are 1x1, so x,y is fine, or center of its sprite)
-                if (atlas_manager_instance) |am| {
-                    if (rendering.getItemScreenRect(item_to_follow, &am)) |rect| {
-                        camera.target.x = rect.x + rect.width / 2.0;
-                        camera.target.y = rect.y + rect.height / 2.0;
-                    } else {
-                        camera.target.x = @as(f32, @floatFromInt(item_to_follow.x)) + 0.5;
-                        camera.target.y = @as(f32, @floatFromInt(item_to_follow.y)) + 0.5;
-                    }
+        } else {
+            followed_entity_idx = null;
+        }
+    } else if (followed_item_idx) |idx| {
+        if (idx < world.items.items.len) {
+            const item_to_follow = world.items.items[idx];
+            if (atlas_manager_instance) |am| {
+                if (rendering.getItemScreenRect(item_to_follow, &am)) |rect| {
+                    camera.target.x = rect.x + rect.width / 2.0;
+                    camera.target.y = rect.y + rect.height / 2.0;
                 } else {
                     camera.target.x = @as(f32, @floatFromInt(item_to_follow.x)) + 0.5;
                     camera.target.y = @as(f32, @floatFromInt(item_to_follow.y)) + 0.5;
                 }
             } else {
-                followed_item_idx = null; // Followed item no longer exists
+                camera.target.x = @as(f32, @floatFromInt(item_to_follow.x)) + 0.5;
+                camera.target.y = @as(f32, @floatFromInt(item_to_follow.y)) + 0.5;
             }
+        } else {
+            followed_item_idx = null;
         }
-        // If neither is followed, camera target is controlled by panning.
     }
 
     if (static_world_needs_redraw and !is_game_paused) {
@@ -521,7 +533,6 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
     }
 
     if (atlas_manager_instance) |am_instance| {
-        // Pass followed entity/item to draw a different highlight if desired
         rendering.drawDynamicElementsAndOverlays(&world, &camera, hovered_entity_idx, followed_entity_idx, allocator, &am_instance, &drawable_entity_list);
     }
 
@@ -532,10 +543,19 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
     ray.endMode2D();
 
     if (atlas_manager_instance) |am_instance| {
-        ui.drawUI(allocator, &am_instance, &world,
-            // REMOVED: collected_wood_val, collected_rocks_val, collected_brush_items_val,
-            is_music_muted, audio_stream_loaded, hovered_entity_idx, hovered_item_idx, current_mouse_screen_pos, is_game_paused, followed_entity_idx, // NEW: Pass followed entity for UI
-            followed_item_idx // NEW: Pass followed item for UI
+        ui.drawUI(
+            allocator,
+            &am_instance,
+            &world,
+            is_music_muted,
+            audio_stream_loaded,
+            hovered_entity_idx,
+            hovered_item_idx,
+            current_mouse_screen_pos,
+            is_game_paused,
+            followed_entity_idx,
+            followed_item_idx,
+            game_speed_multiplier,
         );
     }
 }

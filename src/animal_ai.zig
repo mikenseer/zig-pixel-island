@@ -21,8 +21,11 @@ pub fn distSq(x1: i32, y1: i32, x2: i32, y2: i32) i64 {
 }
 
 // Helper to choose a new random wander target for an entity
-pub fn chooseNewWanderTarget(entity: *types.Entity, prng: *RandomInterface, world_width: u32, world_height: u32) void {
-    const steps = prng.intRangeAtMost(u8, config.min_wander_steps, config.max_wander_steps);
+pub fn chooseNewWanderTarget(entity: *types.Entity, prng: *RandomInterface, world_width: u32, world_height: u32, is_escape_wander: bool) void {
+    const min_s = if (is_escape_wander) config.min_escape_wander_steps else config.min_wander_steps;
+    const max_s = if (is_escape_wander) config.max_escape_wander_steps else config.max_wander_steps;
+    const steps = prng.intRangeAtMost(u8, min_s, max_s);
+
     const direction = prng.intRangeAtMost(u8, 0, 7);
     var dx: i32 = 0;
     var dy: i32 = 0;
@@ -54,14 +57,13 @@ pub fn chooseNewWanderTarget(entity: *types.Entity, prng: *RandomInterface, worl
     entity.wander_target_x = math.clamp(entity.x + dx, 0, @as(i32, @intCast(world_width)) - 1);
     entity.wander_target_y = math.clamp(entity.y + dy, 0, @as(i32, @intCast(world_height)) - 1);
     entity.wander_steps_taken = 0;
-    entity.wander_steps_total = steps + prng.intRangeAtMost(u8, 0, @divTrunc(steps, 2));
+    entity.wander_steps_total = steps;
     entity.move_cooldown_ticks = 0;
 
-    if (entity.current_action == .Idle or entity.current_action == .SeekingFood or entity.current_action == .Wandering) {
-        entity.target_entity_idx = null;
-        entity.target_item_idx = null;
-    }
-    log.debug("{any} at {d},{d} chose new general wander target: {d},{d} (was {any})", .{ entity.entity_type, entity.x, entity.y, entity.wander_target_x, entity.wander_target_y, entity.current_action });
+    // When choosing a general wander target (e.g. from Idle or failed SeekingFood, or escape wander), clear specific targets.
+    entity.target_entity_idx = null;
+    entity.target_item_idx = null;
+    log.debug("{any} at {d},{d} chose new general wander target: {d},{d} (escape: {any}, steps: {d}, was {any})", .{ entity.entity_type, entity.x, entity.y, entity.wander_target_x, entity.wander_target_y, is_escape_wander, steps, entity.current_action });
 }
 
 // Helper for an entity to attempt one step towards its current wander_target_x/y
@@ -72,15 +74,17 @@ pub fn attemptMoveTowardsWanderTarget(entity: *types.Entity, world: *const types
     }
 
     if (entity.x == entity.wander_target_x and entity.y == entity.wander_target_y) {
+        // If it was wandering (general or escape), or hunting/picking up but target is now gone, become Idle.
         if (entity.current_action == .Wandering or
             (entity.current_action == .Hunting and entity.target_entity_idx == null) or
             (entity.current_action == .PickingUpItem and entity.target_item_idx == null))
         {
-            log.debug("{any} at {d},{d} reached target/destination {d},{d}. Action: {any} -> Idle. Resetting must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, entity.wander_target_x, entity.wander_target_y, entity.current_action });
+            log.debug("{any} at {d},{d} reached target/destination {d},{d}. Action: {any} -> Idle. Clearing must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, entity.wander_target_x, entity.wander_target_y, entity.current_action });
             entity.current_action = .Idle;
             entity.must_complete_wander_step = false;
             entity.pathing_attempts_to_current_target = 0;
         }
+        // If Hunting/PickingUpItem and target is still valid, the main AI loop will transition to Attacking/actual pickup.
         return;
     }
 
@@ -99,33 +103,34 @@ pub fn attemptMoveTowardsWanderTarget(entity: *types.Entity, world: *const types
         next_y -= 1;
     }
 
+    // Check if stuck (no change in position towards target)
     if (next_x == entity.x and next_y == entity.y and (entity.x != entity.wander_target_x or entity.y != entity.wander_target_y)) {
-        log.debug("{any} at {d},{d} seems stuck. Current action {any}. Target {d},{d}. -> Idle. Resetting must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, entity.current_action, entity.wander_target_x, entity.wander_target_y });
+        log.debug("{any} at {d},{d} seems stuck trying to reach {d},{d} (action: {any}).", .{ entity.entity_type, entity.x, entity.y, entity.wander_target_x, entity.wander_target_y, entity.current_action });
         if (entity.current_action == .Hunting or entity.current_action == .PickingUpItem) {
             entity.pathing_attempts_to_current_target += 1;
             log.debug("... Pathing attempt {d}/{d} for current target.", .{ entity.pathing_attempts_to_current_target, config.max_pathing_attempts_before_give_up });
             if (entity.pathing_attempts_to_current_target >= config.max_pathing_attempts_before_give_up) {
-                log.info("... Giving up on current target due to being stuck, will choose a general wander.", .{}); // CORRECTED
+                log.info("... Giving up on current target due to being stuck, will choose an escape wander.", .{});
                 if (entity.current_action == .Hunting and entity.target_entity_idx != null) {
                     entity.blocked_target_idx = entity.target_entity_idx;
                     entity.blocked_target_is_item = false;
-                    entity.blocked_target_cooldown = 180;
+                    entity.blocked_target_cooldown = config.general_post_action_cooldown; // Use general cooldown
                 } else if (entity.current_action == .PickingUpItem and entity.target_item_idx != null) {
                     entity.blocked_target_idx = entity.target_item_idx;
                     entity.blocked_target_is_item = true;
-                    entity.blocked_target_cooldown = 180;
+                    entity.blocked_target_cooldown = config.general_post_action_cooldown;
                 }
                 entity.target_entity_idx = null;
                 entity.target_item_idx = null;
-                chooseNewWanderTarget(entity, prng, world.width, world.height);
+                chooseNewWanderTarget(entity, prng, world.width, world.height, true); // true for escape wander
                 entity.current_action = .Wandering;
                 entity.must_complete_wander_step = true;
                 entity.pathing_attempts_to_current_target = 0;
             } else {
-                entity.current_action = .Idle;
+                entity.current_action = .Idle; // Pause to re-evaluate next tick, target is kept (unless cleared by Idle logic)
                 entity.move_cooldown_ticks = prng.intRangeAtMost(u16, 20, 40);
             }
-        } else {
+        } else { // Was a general wander that got stuck
             entity.current_action = .Idle;
             entity.pathing_attempts_to_current_target = 0;
         }
@@ -144,14 +149,13 @@ pub fn attemptMoveTowardsWanderTarget(entity: *types.Entity, world: *const types
     if (rules.can_pass) {
         entity.x = next_x;
         entity.y = next_y;
-        entity.pathing_attempts_to_current_target = 0;
+        if (entity.current_action == .Hunting or entity.current_action == .PickingUpItem) {
+            entity.pathing_attempts_to_current_target = 0; // Successful step towards target, reset pathing attempts
+        }
 
         if (entity.current_action == .Wandering) {
             entity.wander_steps_taken += 1;
-            if (entity.must_complete_wander_step) {
-                log.debug("{any} at {d},{d} completed one 'must_complete_wander_step' by moving. Flag cleared.", .{ entity.entity_type, entity.x, entity.y });
-                entity.must_complete_wander_step = false;
-            }
+            // must_complete_wander_step is cleared when the wander completes or becomes Idle
         }
 
         if (rules.speed_modifier > 0.0 and rules.speed_modifier < 1.0) {
@@ -160,27 +164,27 @@ pub fn attemptMoveTowardsWanderTarget(entity: *types.Entity, world: *const types
         } else {
             entity.move_cooldown_ticks = 0;
         }
-    } else {
+    } else { // Path blocked
         if (entity.current_action != .Idle) {
-            log.debug("{any} at {d},{d} move to {d},{d} blocked. Current action: {any}. -> Idle. Resetting must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, next_x, next_y, entity.current_action });
+            log.debug("{any} at {d},{d} move to {d},{d} blocked. Current action: {any}.", .{ entity.entity_type, entity.x, entity.y, next_x, next_y, entity.current_action });
         }
         if (entity.current_action == .Hunting or entity.current_action == .PickingUpItem) {
             entity.pathing_attempts_to_current_target += 1;
             log.debug("... Pathing attempt {d}/{d} for current target.", .{ entity.pathing_attempts_to_current_target, config.max_pathing_attempts_before_give_up });
             if (entity.pathing_attempts_to_current_target >= config.max_pathing_attempts_before_give_up) {
-                log.info("... Giving up on current target due to blocked path, will choose a general wander.", .{}); // CORRECTED
+                log.info("... Giving up on current target due to blocked path, will choose an escape wander.", .{});
                 if (entity.current_action == .Hunting and entity.target_entity_idx != null) {
                     entity.blocked_target_idx = entity.target_entity_idx;
                     entity.blocked_target_is_item = false;
-                    entity.blocked_target_cooldown = 180;
+                    entity.blocked_target_cooldown = config.general_post_action_cooldown;
                 } else if (entity.current_action == .PickingUpItem and entity.target_item_idx != null) {
                     entity.blocked_target_idx = entity.target_item_idx;
                     entity.blocked_target_is_item = true;
-                    entity.blocked_target_cooldown = 180;
+                    entity.blocked_target_cooldown = config.general_post_action_cooldown;
                 }
                 entity.target_entity_idx = null;
                 entity.target_item_idx = null;
-                chooseNewWanderTarget(entity, prng, world.width, world.height);
+                chooseNewWanderTarget(entity, prng, world.width, world.height, true);
                 entity.current_action = .Wandering;
                 entity.must_complete_wander_step = true;
                 entity.pathing_attempts_to_current_target = 0;
@@ -196,8 +200,9 @@ pub fn attemptMoveTowardsWanderTarget(entity: *types.Entity, world: *const types
     }
 
     if (entity.current_action == .Wandering and entity.wander_steps_taken >= entity.wander_steps_total) {
-        log.debug("{any} at {d},{d} completed wander ({d}/{d} steps). Action: Wandering -> Idle. Resetting must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, entity.wander_steps_taken, entity.wander_steps_total });
+        log.debug("{any} at {d},{d} completed wander ({d}/{d} steps). Action: Wandering -> Idle. Clearing must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, entity.wander_steps_taken, entity.wander_steps_total });
         entity.current_action = .Idle;
         entity.must_complete_wander_step = false;
+        entity.pathing_attempts_to_current_target = 0;
     }
 }

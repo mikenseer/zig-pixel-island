@@ -26,13 +26,15 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
         return;
     }
 
-    // Decrement blocked target cooldown
     if (sheep_ptr.blocked_target_cooldown > 0) {
         sheep_ptr.blocked_target_cooldown -= 1;
         if (sheep_ptr.blocked_target_cooldown == 0) {
             log.debug("Sheep {d},{d} blocked target cooldown expired for target {?d} (is_item: {any})", .{ sheep_ptr.x, sheep_ptr.y, sheep_ptr.blocked_target_idx, sheep_ptr.blocked_target_is_item });
             sheep_ptr.blocked_target_idx = null;
         }
+    }
+    if (sheep_ptr.post_action_cooldown > 0) {
+        sheep_ptr.post_action_cooldown -= 1;
     }
 
     const graze_opportunistic_hp_val = @as(i16, @intFromFloat(@as(f32, @floatFromInt(sheep_ptr.max_hp)) * config.sheep_hp_graze_opportunistic_threshold_percent));
@@ -41,7 +43,6 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
     const is_opportunistically_grazing = sheep_ptr.current_hp <= graze_opportunistic_hp_val;
     const is_actively_seeking_food = sheep_ptr.current_hp < seek_food_actively_hp_val;
 
-    // --- Eating Timer ---
     if (sheep_ptr.current_action == .Eating) {
         if (sheep_ptr.current_action_timer > 0) {
             sheep_ptr.current_action_timer -= 1;
@@ -52,59 +53,43 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
                 }
                 sheep_ptr.current_action = .Idle;
                 sheep_ptr.must_complete_wander_step = false;
+                sheep_ptr.post_action_cooldown = config.general_post_action_cooldown; // Cooldown after eating
             }
         }
         return;
     }
 
-    // --- Attack/Harvest Cooldown ---
     if (sheep_ptr.attack_cooldown > 0) {
         sheep_ptr.attack_cooldown -= 1;
     }
 
-    // --- Initial hunger check if Idle: Transition to SeekingFood if actively hungry ---
-    if (is_actively_seeking_food and sheep_ptr.current_action == .Idle) {
+    // If Idle and actively hungry (and not on post-action cooldown), start seeking food.
+    if (is_actively_seeking_food and sheep_ptr.current_action == .Idle and sheep_ptr.post_action_cooldown == 0) {
         log.debug("Sheep {d},{d} is Idle and ACTIVELY hungry (HP: {d}/{d}). -> SeekingFood.", .{ sheep_ptr.x, sheep_ptr.y, sheep_ptr.current_hp, sheep_ptr.max_hp });
         sheep_ptr.current_action = .SeekingFood;
         sheep_ptr.target_entity_idx = null;
         sheep_ptr.target_item_idx = null;
         sheep_ptr.must_complete_wander_step = false;
-        sheep_ptr.pathing_attempts_to_current_target = 0; // Reset for new seek
+        sheep_ptr.pathing_attempts_to_current_target = 0;
     }
 
-    // --- Main AI State Machine ---
     switch (sheep_ptr.current_action) {
         .Idle => {
+            if (sheep_ptr.post_action_cooldown > 0) {
+                return;
+            } // Wait out post-action cooldown
+
+            // If actively hungry, the check above should have transitioned it.
+            // If opportunistically hungry (but not actively so), look for nearby food.
             if (is_opportunistically_grazing and !is_actively_seeking_food) {
                 var found_opportunistic_food = false;
 
-                // If it was trying to path to a target and got paused (became Idle), try resuming if not on blocked cooldown
-                if (sheep_ptr.target_entity_idx) |target_brush_idx| {
-                    if (!(sheep_ptr.blocked_target_idx != null and sheep_ptr.blocked_target_idx.? == target_brush_idx and !sheep_ptr.blocked_target_is_item and sheep_ptr.blocked_target_cooldown > 0)) {
-                        if (target_brush_idx < world_ptr.entities.items.len) {
-                            const remembered_brush = world_ptr.entities.items[target_brush_idx];
-                            if (remembered_brush.entity_type == .Brush and remembered_brush.current_hp > 0) {
-                                log.debug("Sheep {d},{d} Idle, opportunistic, resuming hunt for remembered Brush {d}.", .{ sheep_ptr.x, sheep_ptr.y, target_brush_idx });
-                                sheep_ptr.wander_target_x = remembered_brush.x;
-                                sheep_ptr.wander_target_y = remembered_brush.y;
-                                sheep_ptr.current_action = .Hunting;
-                                found_opportunistic_food = true;
-                            } else {
-                                sheep_ptr.target_entity_idx = null;
-                            } // Target no longer valid
-                        } else {
-                            sheep_ptr.target_entity_idx = null;
-                        } // Target index out of bounds
-                    } else {
-                        log.debug("Sheep {d},{d} Idle, remembered Brush {d} is on blocked cooldown.", .{ sheep_ptr.x, sheep_ptr.y, target_brush_idx });
-                        sheep_ptr.target_entity_idx = null; // Forget it for now
-                    }
-                } else if (sheep_ptr.target_item_idx) |target_item_idx_val| {
+                // Try to resume previous target if valid & not on blocked cooldown
+                if (sheep_ptr.target_item_idx) |target_item_idx_val| {
                     if (!(sheep_ptr.blocked_target_idx != null and sheep_ptr.blocked_target_idx.? == target_item_idx_val and sheep_ptr.blocked_target_is_item and sheep_ptr.blocked_target_cooldown > 0)) {
                         if (target_item_idx_val < world_ptr.items.items.len) {
                             const remembered_item = world_ptr.items.items[target_item_idx_val];
                             if (remembered_item.item_type == .Grain) {
-                                log.debug("Sheep {d},{d} Idle, opportunistic, resuming pickup for remembered Grain {d}.", .{ sheep_ptr.x, sheep_ptr.y, target_item_idx_val });
                                 sheep_ptr.wander_target_x = remembered_item.x;
                                 sheep_ptr.wander_target_y = remembered_item.y;
                                 sheep_ptr.current_action = .PickingUpItem;
@@ -116,12 +101,30 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
                             sheep_ptr.target_item_idx = null;
                         }
                     } else {
-                        log.debug("Sheep {d},{d} Idle, remembered Grain {d} is on blocked cooldown.", .{ sheep_ptr.x, sheep_ptr.y, target_item_idx_val });
                         sheep_ptr.target_item_idx = null;
-                    }
+                    } // It's blocked, forget it
+                } else if (sheep_ptr.target_entity_idx) |target_brush_idx| {
+                    if (!(sheep_ptr.blocked_target_idx != null and sheep_ptr.blocked_target_idx.? == target_brush_idx and !sheep_ptr.blocked_target_is_item and sheep_ptr.blocked_target_cooldown > 0)) {
+                        if (target_brush_idx < world_ptr.entities.items.len) {
+                            const remembered_brush = world_ptr.entities.items[target_brush_idx];
+                            if (remembered_brush.entity_type == .Brush and remembered_brush.current_hp > 0) {
+                                sheep_ptr.wander_target_x = remembered_brush.x;
+                                sheep_ptr.wander_target_y = remembered_brush.y;
+                                sheep_ptr.current_action = .Hunting;
+                                found_opportunistic_food = true;
+                            } else {
+                                sheep_ptr.target_entity_idx = null;
+                            }
+                        } else {
+                            sheep_ptr.target_entity_idx = null;
+                        }
+                    } else {
+                        sheep_ptr.target_entity_idx = null;
+                    } // It's blocked, forget it
                 }
 
-                if (!found_opportunistic_food) { // If no remembered target, or remembered target was invalid/on cooldown
+                // If no remembered target, scan for new opportunistic targets
+                if (!found_opportunistic_food) {
                     var closest_grain_idx: ?usize = null;
                     var min_dist_sq_grain: i64 = -1;
                     for (world_ptr.items.items, 0..) |*item_on_ground, idx| {
@@ -148,7 +151,6 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
                         sheep_ptr.pathing_attempts_to_current_target = 0;
                     }
                 }
-
                 if (!found_opportunistic_food) {
                     var closest_brush_idx: ?usize = null;
                     var min_dist_sq_brush: i64 = -1;
@@ -178,13 +180,13 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
                 }
 
                 if (!found_opportunistic_food and prng.float(f32) < config.sheep_move_attempt_chance) {
-                    animal_ai_utils.chooseNewWanderTarget(sheep_ptr, prng, world_ptr.width, world_ptr.height);
+                    animal_ai_utils.chooseNewWanderTarget(sheep_ptr, prng, world_ptr.width, world_ptr.height, false);
                     sheep_ptr.current_action = .Wandering;
                     sheep_ptr.must_complete_wander_step = false;
                 }
             } else if (!is_opportunistically_grazing) {
                 if (prng.float(f32) < config.sheep_move_attempt_chance) {
-                    animal_ai_utils.chooseNewWanderTarget(sheep_ptr, prng, world_ptr.width, world_ptr.height);
+                    animal_ai_utils.chooseNewWanderTarget(sheep_ptr, prng, world_ptr.width, world_ptr.height, false);
                     sheep_ptr.current_action = .Wandering;
                     sheep_ptr.must_complete_wander_step = false;
                 }
@@ -198,7 +200,7 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
                 sheep_ptr.target_entity_idx = null;
                 sheep_ptr.target_item_idx = null;
                 sheep_ptr.pathing_attempts_to_current_target = 0;
-            } else if (is_opportunistically_grazing) {
+            } else if (is_opportunistically_grazing and sheep_ptr.post_action_cooldown == 0) {
                 var found_opportunistic_food = false;
                 var closest_grain_idx: ?usize = null;
                 var min_dist_sq_grain: i64 = -1;
@@ -333,8 +335,8 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
                     animal_ai_utils.attemptMoveTowardsWanderTarget(sheep_ptr, world_ptr, prng);
                 }
             } else {
-                log.debug("Sheep {d},{d} no food targets in SeekingFood (actively hungry). -> Wandering (forced step).", .{ sheep_ptr.x, sheep_ptr.y });
-                animal_ai_utils.chooseNewWanderTarget(sheep_ptr, prng, world_ptr.width, world_ptr.height); // This clears targets
+                log.debug("Sheep {d},{d} no food targets in SeekingFood (actively hungry). -> Wandering (forced escape).", .{ sheep_ptr.x, sheep_ptr.y });
+                animal_ai_utils.chooseNewWanderTarget(sheep_ptr, prng, world_ptr.width, world_ptr.height, true);
                 sheep_ptr.current_action = .Wandering;
                 sheep_ptr.must_complete_wander_step = true;
                 sheep_ptr.pathing_attempts_to_current_target = 0;
@@ -353,7 +355,8 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
                                 _ = world_ptr.items.orderedRemove(target_idx);
                                 sheep_ptr.target_item_idx = null;
                                 sheep_ptr.pathing_attempts_to_current_target = 0;
-                                if (is_opportunistically_grazing) { // Eat if still somewhat hungry
+                                // Eat if actively seeking food OR opportunistically grazing (HP <= 80%)
+                                if (is_actively_seeking_food or is_opportunistically_grazing) {
                                     sheep_ptr.current_action = .Eating;
                                     sheep_ptr.current_action_timer = config.eating_duration_ticks;
                                 } else {
@@ -395,7 +398,7 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
                         if (dx_brush <= 1 and dy_brush <= 1) {
                             sheep_ptr.current_action = .Attacking;
                             sheep_ptr.attack_cooldown = 0;
-                            sheep_ptr.pathing_attempts_to_current_target = 0; // Reached target
+                            sheep_ptr.pathing_attempts_to_current_target = 0;
                         } else {
                             sheep_ptr.wander_target_x = target_brush.x;
                             sheep_ptr.wander_target_y = target_brush.y;
@@ -439,7 +442,7 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
                             const dy_brush_attack = animal_ai_utils.absInt(sheep_ptr.y - target_brush_ptr.y);
                             if (dx_brush_attack <= 1 and dy_brush_attack <= 1) {
                                 combat.resolveAttack(sheep_ptr, target_brush_ptr, world_ptr, prng);
-                                sheep_ptr.pathing_attempts_to_current_target = 0; // Successful attack, reset pathing for this target
+                                sheep_ptr.pathing_attempts_to_current_target = 0;
                                 if (target_brush_ptr.current_hp == 0) {
                                     log.info("Sheep at {d},{d} destroyed Brush {d}. -> SeekingFood.", .{ sheep_ptr.x, sheep_ptr.y, target_idx });
                                     sheep_ptr.target_entity_idx = null;
@@ -450,7 +453,7 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
                             } else {
                                 log.debug("Sheep at {d},{d} in Attacking, but no longer adjacent to Brush {d}. -> Hunting.", .{ sheep_ptr.x, sheep_ptr.y, target_idx });
                                 sheep_ptr.current_action = .Hunting;
-                                sheep_ptr.pathing_attempts_to_current_target = 0; // Reset for new hunt
+                                sheep_ptr.pathing_attempts_to_current_target = 0;
                             }
                         } else {
                             log.debug("Sheep at {d},{d} in Attacking, target Brush {d} invalid/dead. -> Re-evaluate.", .{ sheep_ptr.x, sheep_ptr.y, target_idx });
@@ -490,7 +493,7 @@ pub fn updateSheep(sheep_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: 
             }
         },
         .Fleeing => {
-            animal_ai_utils.chooseNewWanderTarget(sheep_ptr, prng, world_ptr.width, world_ptr.height);
+            animal_ai_utils.chooseNewWanderTarget(sheep_ptr, prng, world_ptr.width, world_ptr.height, false);
             sheep_ptr.current_action = .Wandering;
             sheep_ptr.must_complete_wander_step = false;
         },

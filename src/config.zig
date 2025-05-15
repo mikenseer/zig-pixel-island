@@ -8,7 +8,6 @@ pub const screen_width: c_int = 500;
 pub const screen_height: c_int = 500;
 
 // Terrain Colors
-// ... (colors remain the same)
 pub const very_deep_water_color: ray.Color = .{ .r = 0, .g = 50, .b = 130, .a = 255 };
 pub const deep_water_color: ray.Color = .{ .r = 0, .g = 80, .b = 170, .a = 255 };
 pub const shallow_water_color: ray.Color = .{ .r = 70, .g = 130, .b = 180, .a = 255 };
@@ -79,7 +78,9 @@ pub const sheep_move_attempt_chance: f32 = 0.8;
 pub const bear_move_attempt_chance: f32 = 0.4;
 
 pub const min_wander_steps: u8 = 1;
-pub const max_wander_steps: u8 = 10;
+pub const max_wander_steps: u8 = 5;
+pub const min_escape_wander_steps: u8 = 8;
+pub const max_escape_wander_steps: u8 = 15;
 
 // --- Island Shape & Terrain Generation ---
 pub const island_base_radius_factor: f32 = 0.68;
@@ -203,7 +204,7 @@ pub const bear_hp_hunt_sheep_threshold_percent: f32 = 0.50;
 pub const bear_hp_hunt_peon_threshold_percent: f32 = 0.40;
 pub const bear_meat_opportunistic_sight_radius: f32 = 5.0;
 pub const bear_meat_hungry_sight_radius: f32 = 36.0;
-pub const bear_hunt_target_sight_radius: f32 = 18.0;
+pub const bear_hunt_target_sight_radius: f32 = 20.0;
 
 pub const eating_duration_ticks: u16 = 60;
 pub const bear_eating_duration_ticks: u16 = 90;
@@ -211,7 +212,8 @@ pub const attack_cooldown_ticks: u16 = 60;
 pub const harvest_brush_cooldown_ticks: u16 = 60;
 pub const max_carry_slots: usize = 2;
 pub const max_item_stack_size: u8 = 1;
-pub const max_pathing_attempts_before_give_up: u8 = 3; // NEW: How many times to try pathing before giving up on a target
+pub const max_pathing_attempts_before_give_up: u8 = 3;
+pub const general_post_action_cooldown: u16 = 120; // NEW: ~2 seconds cooldown after eating/major actions
 
 // Item HP and Decay
 pub const meat_initial_hp: i16 = 100;

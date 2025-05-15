@@ -82,7 +82,8 @@ pub const Entity = struct {
     blocked_target_idx: ?usize = null,
     blocked_target_is_item: bool = false,
     blocked_target_cooldown: u16 = 0,
-    pathing_attempts_to_current_target: u8 = 0, // NEW: Counter for pathing attempts
+    pathing_attempts_to_current_target: u8 = 0,
+    post_action_cooldown: u16 = 0, // NEW: Cooldown after certain actions like Eating
 
     pub fn newPlayer(x_pos: i32, y_pos: i32) Entity {
         var e = Entity{
@@ -96,6 +97,7 @@ pub const Entity = struct {
             .processed_death_drops = false,
             .must_complete_wander_step = false,
             .pathing_attempts_to_current_target = 0,
+            .post_action_cooldown = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -116,6 +118,7 @@ pub const Entity = struct {
             .processed_death_drops = false,
             .must_complete_wander_step = false,
             .pathing_attempts_to_current_target = 0,
+            .post_action_cooldown = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -134,6 +137,7 @@ pub const Entity = struct {
             .processed_death_drops = false,
             .must_complete_wander_step = false,
             .pathing_attempts_to_current_target = 0,
+            .post_action_cooldown = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -153,6 +157,7 @@ pub const Entity = struct {
             .processed_death_drops = false,
             .must_complete_wander_step = false,
             .pathing_attempts_to_current_target = 0,
+            .post_action_cooldown = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -172,6 +177,7 @@ pub const Entity = struct {
             .processed_death_drops = false,
             .must_complete_wander_step = false,
             .pathing_attempts_to_current_target = 0,
+            .post_action_cooldown = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -191,6 +197,7 @@ pub const Entity = struct {
             .processed_death_drops = false,
             .must_complete_wander_step = false,
             .pathing_attempts_to_current_target = 0,
+            .post_action_cooldown = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -199,6 +206,7 @@ pub const Entity = struct {
     }
 };
 
+// ... (Cloud, WorldPos, GameWorld, and its methods remain the same)
 pub const CloudType = enum {
     SmallWhispey,
     MediumFluffy,

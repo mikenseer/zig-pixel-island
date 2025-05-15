@@ -15,8 +15,6 @@ const font_size: c_int = 10;
 const line_spacing: c_int = 15;
 const text_icon_spacing: c_int = 5;
 
-// REMOVED: drawResourceLine as it's no longer used for wood/rock/brush
-
 // Helper function to draw a simple line of text.
 fn drawTextLine(
     allocator: std_full.mem.Allocator,
@@ -48,11 +46,13 @@ fn drawTextLine(
     current_y.* += spacing;
 }
 
-// Draws the stats panel for a hovered entity, anchored to mouse position.
-fn drawHoveredEntityStatsPanel(
+// Draws the stats panel for an entity.
+// `is_pinned_top_right` determines if it's anchored or mouse-relative.
+fn drawEntityStatsPanel(
     allocator: std_full.mem.Allocator,
     entity: types.Entity,
     mouse_screen_pos: ray.Vector2,
+    is_pinned_top_right: bool,
 ) !void {
     const panel_padding = config.ui_panel_padding;
     const panel_font_size = config.ui_panel_font_size;
@@ -86,7 +86,7 @@ fn drawHoveredEntityStatsPanel(
     }
     const action_line = fmt.bufPrintZ(&temp_line_buf, "Action: {s}", .{@tagName(entity.current_action)}) catch "Action: N/A";
     try text_lines.append(try allocator.dupeZ(u8, action_line));
-    if (entity.must_complete_wander_step) { // Debug info
+    if (entity.must_complete_wander_step) {
         const wander_flag_line = "MustWander: Yes";
         try text_lines.append(try allocator.dupeZ(u8, wander_flag_line));
     }
@@ -106,21 +106,27 @@ fn drawHoveredEntityStatsPanel(
     const panel_width = max_text_width + (panel_padding * 2);
     const panel_height = @as(c_int, @intCast(text_lines.items.len)) * panel_line_spacing - (panel_line_spacing - panel_font_size) + (panel_padding * 2);
 
-    var panel_x: c_int = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) + panel_offset_x;
-    var panel_y: c_int = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) + panel_offset_y;
+    var panel_x: c_int = 0;
+    var panel_y: c_int = 0;
 
-    if (panel_x + panel_width > config.screen_width) {
-        panel_x = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) - panel_width - panel_offset_x;
+    if (is_pinned_top_right) {
+        panel_x = config.screen_width - panel_width - ui_padding;
+        panel_y = ui_padding;
+    } else {
+        panel_x = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) + panel_offset_x;
+        panel_y = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) + panel_offset_y;
+
+        if (panel_x + panel_width > config.screen_width) {
+            panel_x = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) - panel_width - panel_offset_x;
+        }
+        if (panel_y + panel_height > config.screen_height) {
+            panel_y = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) - panel_height - panel_offset_y;
+        }
     }
-    if (panel_y + panel_height > config.screen_height) {
-        panel_y = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) - panel_height - panel_offset_y;
-    }
-    if (panel_x < 0) {
-        panel_x = 0;
-    }
-    if (panel_y < 0) {
-        panel_y = 0;
-    }
+    if (panel_x < 0) panel_x = 0;
+    if (panel_y < 0) panel_y = 0;
+    if (panel_x + panel_width > config.screen_width) panel_x = config.screen_width - panel_width;
+    if (panel_y + panel_height > config.screen_height) panel_y = config.screen_height - panel_height;
 
     ray.drawRectangle(panel_x, panel_y, panel_width, panel_height, panel_bg_color);
     ray.drawRectangleLines(panel_x, panel_y, panel_width, panel_height, ray.Color.dark_gray);
@@ -160,10 +166,13 @@ fn drawHoveredEntityStatsPanel(
     }
 }
 
-fn drawHoveredItemStatsPanel(
+// Draws the stats panel for an item.
+// `is_pinned_top_right` determines if it's anchored or mouse-relative.
+fn drawItemStatsPanel(
     allocator: std_full.mem.Allocator,
     item: items_module.Item,
     mouse_screen_pos: ray.Vector2,
+    is_pinned_top_right: bool,
 ) !void {
     const panel_padding = config.ui_panel_padding;
     const panel_font_size = config.ui_panel_font_size;
@@ -198,13 +207,23 @@ fn drawHoveredItemStatsPanel(
     const panel_width = max_text_width + (panel_padding * 2);
     const panel_height = @as(c_int, @intCast(text_lines.items.len)) * panel_line_spacing - (panel_line_spacing - panel_font_size) + (panel_padding * 2);
 
-    var panel_x: c_int = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) + panel_offset_x;
-    var panel_y: c_int = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) + panel_offset_y;
+    var panel_x: c_int = 0;
+    var panel_y: c_int = 0;
 
-    if (panel_x + panel_width > config.screen_width) panel_x = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) - panel_width - panel_offset_x;
-    if (panel_y + panel_height > config.screen_height) panel_y = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) - panel_height - panel_offset_y;
+    if (is_pinned_top_right) {
+        panel_x = config.screen_width - panel_width - ui_padding;
+        panel_y = ui_padding;
+    } else {
+        panel_x = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) + panel_offset_x;
+        panel_y = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) + panel_offset_y;
+
+        if (panel_x + panel_width > config.screen_width) panel_x = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) - panel_width - panel_offset_x;
+        if (panel_y + panel_height > config.screen_height) panel_y = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) - panel_height - panel_offset_y;
+    }
     if (panel_x < 0) panel_x = 0;
     if (panel_y < 0) panel_y = 0;
+    if (panel_x + panel_width > config.screen_width) panel_x = config.screen_width - panel_width;
+    if (panel_y + panel_height > config.screen_height) panel_y = config.screen_height - panel_height;
 
     ray.drawRectangle(panel_x, panel_y, panel_width, panel_height, panel_bg_color);
     ray.drawRectangleLines(panel_x, panel_y, panel_width, panel_height, ray.Color.dark_gray);
@@ -237,23 +256,16 @@ pub fn drawUI(
     allocator: std_full.mem.Allocator,
     atlas_manager_ptr: *const atlas_manager.AtlasManager,
     world: *const types.GameWorld,
-    // REMOVED: collected_wood_val, collected_rocks_val, collected_brush_items_val,
     is_music_muted_val: bool,
     audio_stream_loaded_val: bool,
     hovered_entity_idx_val: ?usize,
     hovered_item_idx_val: ?usize,
     mouse_screen_pos_val: ray.Vector2,
     is_game_paused_val: bool,
-    followed_entity_idx_val: ?usize, // NEW
-    followed_item_idx_val: ?usize, // NEW
+    followed_entity_idx_val: ?usize,
+    followed_item_idx_val: ?usize,
+    game_speed_multiplier_val: f32,
 ) void {
-    // REMOVED: Resource line drawing
-    // var current_y_pos_resources: c_int = ui_padding;
-    // const resource_label_x = config.screen_width - ui_padding;
-    // drawResourceLine(allocator, resource_label_x, &current_y_pos_resources, collected_wood_val, .WoodIcon, atlas_manager_ptr);
-    // drawResourceLine(allocator, resource_label_x, &current_y_pos_resources, collected_rocks_val, .RockIcon, atlas_manager_ptr);
-    // drawResourceLine(allocator, resource_label_x, &current_y_pos_resources, collected_brush_items_val, .BrushItemIcon, atlas_manager_ptr);
-
     var current_y_pos_entities: c_int = ui_padding;
     const entity_label_x = ui_padding;
 
@@ -284,18 +296,28 @@ pub fn drawUI(
     drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Items: {d}", .{world.items.items.len}, config.ui_panel_text_color, font_size, line_spacing);
     drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Total Entities: {d}", .{world.entities.items.len}, config.ui_panel_text_color, font_size, line_spacing);
 
-    // Following Info Text
+    // Following Info Text (Top-left, below entity counts)
+    var follow_text_y = current_y_pos_entities + line_spacing; // Start below last entity count
     if (followed_entity_idx_val) |fe_idx| {
         if (fe_idx < world.entities.items.len) {
             const followed_name = @tagName(world.entities.items[fe_idx].entity_type);
-            drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Follow: {s} [{d}]", .{ followed_name, fe_idx }, ray.Color.yellow, font_size, line_spacing);
+            drawTextLine(allocator, entity_label_x, &follow_text_y, "Follow: {s} [{d}]", .{ followed_name, fe_idx }, ray.Color.yellow, font_size, line_spacing);
         }
     } else if (followed_item_idx_val) |fi_idx| {
         if (fi_idx < world.items.items.len) {
             const followed_name = items_module.getItemTypeName(world.items.items[fi_idx].item_type);
-            drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Follow: {s} [{d}]", .{ followed_name, fi_idx }, ray.Color.yellow, font_size, line_spacing);
+            drawTextLine(allocator, entity_label_x, &follow_text_y, "Follow: {s} [{d}]", .{ followed_name, fi_idx }, ray.Color.yellow, font_size, line_spacing);
         }
     }
+
+    // Game Speed Display (Below follow info)
+    var speed_text_y = follow_text_y; // Continue from where follow text left off, or entity_counts if no follow
+    if (followed_entity_idx_val == null and followed_item_idx_val == null) { // If nothing followed, start speed text after entity counts
+        speed_text_y = current_y_pos_entities;
+    }
+    var speed_text_buf: [32]u8 = undefined;
+    const speed_text = fmt.bufPrintZ(&speed_text_buf, "Speed: x{d:.2}", .{game_speed_multiplier_val}) catch "Speed: N/A";
+    drawTextLine(allocator, entity_label_x, &speed_text_y, "{s}", .{speed_text}, ray.Color.sky_blue, font_size, line_spacing);
 
     if (audio_stream_loaded_val) {
         const speaker_sprite_id = if (is_music_muted_val) atlas_manager.SpriteId.SpeakerMuted else atlas_manager.SpriteId.SpeakerUnmuted;
@@ -329,19 +351,43 @@ pub fn drawUI(
         ray.drawText(pause_text, pause_x, pause_y, pause_font_size, ray.Color.yellow);
     }
 
-    if (hovered_entity_idx_val) |h_idx| {
-        if (h_idx < world.entities.items.len) {
-            const entity = world.entities.items[h_idx];
-            drawHoveredEntityStatsPanel(allocator, entity, mouse_screen_pos_val) catch |err| {
-                log.err("Failed to draw entity stats panel: {s}", .{@errorName(err)});
+    // --- Draw Pinned Stats Panel for Followed Entity/Item (Top Right) ---
+    if (followed_entity_idx_val) |fe_idx| {
+        if (fe_idx < world.entities.items.len) {
+            const entity = world.entities.items[fe_idx];
+            drawEntityStatsPanel(allocator, entity, mouse_screen_pos_val, true) catch |err| { // true for pinned
+                log.err("Failed to draw PINNED entity stats panel: {s}", .{@errorName(err)});
             };
         }
-    } else if (hovered_item_idx_val) |item_idx| {
-        if (item_idx < world.items.items.len) {
-            const item = world.items.items[item_idx];
-            drawHoveredItemStatsPanel(allocator, item, mouse_screen_pos_val) catch |err| {
-                log.err("Failed to draw item stats panel: {s}", .{@errorName(err)});
+    } else if (followed_item_idx_val) |fi_idx| {
+        if (fi_idx < world.items.items.len) {
+            const item = world.items.items[fi_idx];
+            drawItemStatsPanel(allocator, item, mouse_screen_pos_val, true) catch |err| { // true for pinned
+                log.err("Failed to draw PINNED item stats panel: {s}", .{@errorName(err)});
             };
+        }
+    }
+
+    // --- Draw Mouse-Relative Stats Panel for Hovered Entity/Item (if not the same as followed) ---
+    if (hovered_entity_idx_val) |h_idx| {
+        // Only draw if not currently following this specific entity (to avoid overlap if mouse is over followed entity)
+        if (followed_entity_idx_val == null or followed_entity_idx_val.? != h_idx) {
+            if (h_idx < world.entities.items.len) {
+                const entity = world.entities.items[h_idx];
+                drawEntityStatsPanel(allocator, entity, mouse_screen_pos_val, false) catch |err| { // false for mouse-relative
+                    log.err("Failed to draw HOVERED entity stats panel: {s}", .{@errorName(err)});
+                };
+            }
+        }
+    } else if (hovered_item_idx_val) |item_idx| {
+        // Only draw if not currently following this specific item
+        if (followed_item_idx_val == null or followed_item_idx_val.? != item_idx) {
+            if (item_idx < world.items.items.len) {
+                const item = world.items.items[item_idx];
+                drawItemStatsPanel(allocator, item, mouse_screen_pos_val, false) catch |err| { // false for mouse-relative
+                    log.err("Failed to draw HOVERED item stats panel: {s}", .{@errorName(err)});
+                };
+            }
         }
     }
 }
