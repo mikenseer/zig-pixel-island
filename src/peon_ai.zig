@@ -3,15 +3,14 @@
 const std_full = @import("std");
 const types = @import("types.zig");
 const config = @import("config.zig");
-const art = @import("art.zig");
-const items = @import("items.zig"); // For item interaction later
-// const combat = @import("combat.zig"); // Will be needed for hunting/attacking
+const items_module = @import("items.zig");
+const inventory = @import("inventory.zig");
+const entity_processing = @import("entity_processing.zig"); // NEW
 
 const RandomInterface = std_full.Random;
 const log = std_full.log;
 const math = std_full.math;
 
-// Helper to choose a new random wander target for a Peon
 fn chooseNewWanderTargetPeon(peon: *types.Entity, prng: *RandomInterface, world_width: u32, world_height: u32) void {
     const steps = prng.intRangeAtMost(u8, config.min_wander_steps, config.max_wander_steps);
     const direction = prng.intRangeAtMost(u8, 0, 7);
@@ -46,9 +45,11 @@ fn chooseNewWanderTargetPeon(peon: *types.Entity, prng: *RandomInterface, world_
     peon.wander_steps_taken = 0;
     peon.wander_steps_total = steps * 2;
     peon.move_cooldown_ticks = 0;
+    peon.target_entity_idx = null;
+    peon.target_item_idx = null;
+    peon.must_complete_wander_step = false;
 }
 
-// Helper for a Peon to attempt one step towards its wander target
 fn attemptMoveTowardsWanderTargetPeon(peon: *types.Entity, world: *const types.GameWorld, prng: *RandomInterface) void {
     _ = prng;
     if (peon.move_cooldown_ticks > 0) {
@@ -104,39 +105,19 @@ fn attemptMoveTowardsWanderTargetPeon(peon: *types.Entity, world: *const types.G
     }
 }
 
-pub fn updatePeon(peon: *types.Entity, world: *const types.GameWorld, prng: *RandomInterface) void {
-    if (peon.entity_type != .Player) return;
+pub fn updatePeon(peon_ptr: *types.Entity, world_ptr: *types.GameWorld, prng: *RandomInterface) void {
+    if (peon_ptr.entity_type != .Player) return;
 
-    // Death check (though main loop also handles removal, AI might react to its own death)
-    if (peon.current_hp == 0) {
-        // Peon specific death logic (e.g. dropping items from inventory if any)
-        // For now, just log. Item drops are handled by main loop after this AI update.
-        // Or, if peon AI should handle its *own* item drops, do it here.
-        // For consistency with animal_ai, let's assume main loop handles removal,
-        // but AI can react to being dead (e.g., stop further actions).
-        // If a peon dies, it won't drop meat/corpse like animals.
-        // It might drop its inventory in the future.
-        return;
-    }
+    // Process HP decay first for this entity
+    entity_processing.processHpDecay(peon_ptr); // NEW
 
-    // TODO: Implement hunger check: if current_hp / max_hp < config.peon_hunger_threshold_percent, change action to .SeekingFood
-    // TODO: Implement .SeekingFood: find nearest Meat item or Sheep. If Sheep, change to .Hunting. If Meat, change to .PickingUpItem
-    // TODO: Implement .Hunting: move towards target_entity_idx (Sheep). If adjacent, change to .Attacking.
-    // TODO: Implement .Attacking: call combat.resolveAttack. If target dies, change to .PickingUpItem (for meat).
-    // TODO: Implement .PickingUpItem: move towards target_item_idx. If adjacent, pick up, add to inventory. If inventory full, or item is food, change to .Eating.
-    // TODO: Implement .Eating: if has Meat in inventory, consume it, gain HP, remove from inventory. Change to .Idle or .Wandering.
-    // TODO: Implement .Fleeing: if threatened (e.g. by Bear).
+    if (peon_ptr.current_hp == 0) return; // Check if died from decay
 
-    // CORRECTED: Added else case for exhaustive switch
-    switch (peon.current_action) {
-        .Idle => chooseNewWanderTargetPeon(peon, prng, world.width, world.height),
-        .Wandering => attemptMoveTowardsWanderTargetPeon(peon, world, prng),
-        // Placeholder for new states
+    switch (peon_ptr.current_action) {
+        .Idle => chooseNewWanderTargetPeon(peon_ptr, prng, world_ptr.width, world_ptr.height),
+        .Wandering => attemptMoveTowardsWanderTargetPeon(peon_ptr, world_ptr, prng),
         .SeekingFood, .Hunting, .Attacking, .Eating, .PickingUpItem, .Fleeing => {
-            // For now, if in an unimplemented state, revert to wandering or idle
-            // This prevents getting stuck.
-            // log.debug("Peon in unimplemented state: {any}, reverting to wander.", .{peon.current_action});
-            chooseNewWanderTargetPeon(peon, prng, world.width, world.height);
+            chooseNewWanderTargetPeon(peon_ptr, prng, world_ptr.width, world_ptr.height);
         },
     }
 }

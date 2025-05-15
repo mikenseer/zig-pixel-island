@@ -25,9 +25,14 @@ const rendering = @import("rendering.zig");
 const peon_ai = @import("peon_ai.zig");
 const ui = @import("ui.zig");
 const atlas_manager = @import("atlas_manager.zig");
-const animal_ai = @import("animal_ai.zig");
-const items = @import("items.zig");
+// animal_ai.zig now primarily holds shared utilities for animal AI
+const animal_ai_utils = @import("animal_ai.zig");
+const sheep_ai = @import("sheep_ai.zig");
+const bear_ai = @import("bear_ai.zig");
+const items_module = @import("items.zig");
 const combat = @import("combat.zig");
+const entity_processing = @import("entity_processing.zig");
+const inventory = @import("inventory.zig");
 
 // --- Game State ---
 var gpa = heap.GeneralPurposeAllocator(.{}){};
@@ -58,7 +63,7 @@ var static_world_needs_redraw: bool = true;
 // --- Resources ---
 var collected_wood: u32 = 0;
 var collected_rocks: u32 = 0;
-var collected_brush_items: u32 = 0; // This will now effectively be "collected_grain" via player action
+var collected_brush_items: u32 = 0;
 
 // --- Audio ---
 var ogg_file_data: []u8 = undefined;
@@ -68,15 +73,16 @@ var audio_stream_loaded: bool = false;
 var audio_stream_cursor: u64 = 0;
 var is_music_muted: bool = false;
 var music_volume: f32 = 1.0;
+const dummy_audio_byte: u8 = 0;
 
 // --- Timing ---
-var peon_move_timer: u32 = 0;
-var animal_move_timer: u32 = 0;
+// REMOVED: peon_move_timer and animal_move_timer. AI updates are now called every frame.
 
 // --- Loading Screen ---
 var current_loading_status_buffer: [100]u8 = undefined;
 
 fn audioStreamCallback(buffer_ptr: ?*anyopaque, frames_to_process: c_uint) callconv(.C) void {
+    // ... (audioStreamCallback remains the same)
     const buffer: [*]i16 = if (buffer_ptr) |ptr| @as([*]i16, @alignCast(@ptrCast(ptr))) else return;
     const samples_to_process = frames_to_process * @as(c_uint, ogg_wave_info.channels);
     var samples_processed: c_uint = 0;
@@ -109,6 +115,7 @@ fn audioStreamCallback(buffer_ptr: ?*anyopaque, frames_to_process: c_uint) callc
 }
 
 fn drawCurrentLoadingScreen(status_text_slice: [:0]const u8) void {
+    // ... (drawCurrentLoadingScreen remains the same) ...
     if (ray.isWindowReady()) {
         ray.beginDrawing();
         defer ray.endDrawing();
@@ -143,6 +150,7 @@ fn drawCurrentLoadingScreen(status_text_slice: [:0]const u8) void {
 }
 
 fn updateAndDrawLoadingStatus(comptime status_fmt: []const u8, args: anytype) void {
+    // ... (updateAndDrawLoadingStatus remains the same) ...
     @memset(current_loading_status_buffer[0..], @as(u8, 0));
     const status_text_slice = fmt.bufPrintZ(&current_loading_status_buffer, status_fmt, args) catch |err| {
         log.err("Failed to format loading status: {s}", .{@errorName(err)});
@@ -156,32 +164,60 @@ fn updateAndDrawLoadingStatus(comptime status_fmt: []const u8, args: anytype) vo
 }
 
 fn initGame(allocator: std_full.mem.Allocator) !void {
+    // ... (initGame audio loading part remains the same as your working version) ...
     updateAndDrawLoadingStatus("Loading Audio...", .{});
-    ogg_file_data = ray.loadFileData("audio/zigisland.ogg") catch |err| {
-        log.err("Failed to load OGG file data ('audio/zigisland.ogg'): {s}", .{@errorName(err)});
-        return err;
+    ogg_file_data = ray.loadFileData("audio/zigisland.ogg") catch |err| blk: {
+        log.warn("Failed to load OGG file data ('audio/zigisland.ogg'): {s}. Audio will be disabled.", .{@errorName(err)});
+        audio_stream_loaded = false;
+        break :blk &.{};
     };
-    errdefer ray.unloadFileData(ogg_file_data);
 
-    ogg_wave_info = ray.loadWaveFromMemory(".ogg", ogg_file_data) catch |err| {
-        log.err("Failed to load wave info from OGG data: {s}", .{@errorName(err)});
-        return err;
-    };
-    errdefer ray.unloadWave(ogg_wave_info);
+    if (ogg_file_data.len > 0) {
+        errdefer if (ogg_file_data.len > 0) {
+            ray.unloadFileData(ogg_file_data);
+        };
 
-    background_audio_stream = try ray.loadAudioStream(ogg_wave_info.sampleRate, ogg_wave_info.sampleSize, ogg_wave_info.channels);
-    audio_stream_loaded = true;
-    errdefer {
-        if (audio_stream_loaded) {
-            ray.unloadAudioStream(background_audio_stream);
+        ogg_wave_info = ray.loadWaveFromMemory(".ogg", ogg_file_data) catch |err| blk: {
+            log.warn("Failed to load wave info: {s}", .{@errorName(err)});
+            audio_stream_loaded = false;
+            break :blk ray.Wave{
+                .frameCount = 0,
+                .sampleRate = 0,
+                .sampleSize = 0,
+                .channels = 0,
+                .data = @as(*anyopaque, @ptrCast(@constCast(&dummy_audio_byte))),
+            };
+        };
+
+        if (ogg_wave_info.frameCount > 0) {
+            errdefer if (ogg_wave_info.frameCount > 0) {
+                ray.unloadWave(ogg_wave_info);
+            };
+
+            background_audio_stream = ray.loadAudioStream(ogg_wave_info.sampleRate, ogg_wave_info.sampleSize, ogg_wave_info.channels) catch |err_stream| {
+                log.warn("Failed to load audio stream: {s}. Audio will be disabled.", .{@errorName(err_stream)});
+                audio_stream_loaded = false;
+                return err_stream;
+            };
+            audio_stream_loaded = true;
+
+            errdefer if (audio_stream_loaded) {
+                ray.unloadAudioStream(background_audio_stream);
+            };
+
+            ray.setAudioStreamCallback(background_audio_stream, audioStreamCallback);
+            ray.playAudioStream(background_audio_stream);
+            ray.setAudioStreamVolume(background_audio_stream, if (is_music_muted) 0.0 else music_volume);
+            log.info("Audio Initialized and Playing.", .{});
+        } else {
+            audio_stream_loaded = false;
+            log.warn("Audio wave info not valid (frameCount is 0). Audio will be disabled.", .{});
         }
+    } else {
+        audio_stream_loaded = false;
+        log.warn("OGG file data not loaded. Audio will be disabled.", .{});
     }
-
-    ray.setAudioStreamCallback(background_audio_stream, audioStreamCallback);
-    ray.playAudioStream(background_audio_stream);
-    ray.setAudioStreamVolume(background_audio_stream, if (is_music_muted) 0.0 else music_volume);
-    log.info("Audio Initialized.", .{});
-
+    // ... (rest of initGame remains the same) ...
     updateAndDrawLoadingStatus("Setting up Game Systems...", .{});
     ray.setTargetFPS(60);
 
@@ -203,18 +239,15 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
     updateAndDrawLoadingStatus("Preparing Graphics...", .{});
     static_world_texture = try ray.loadRenderTexture(config.screen_width, config.screen_height);
     errdefer ray.unloadRenderTexture(static_world_texture);
-    static_world_needs_redraw = true;
 
     updateAndDrawLoadingStatus("Creating Texture Atlas...", .{});
     atlas_manager_instance = try atlas_manager.AtlasManager.init(allocator);
-    errdefer {
-        if (atlas_manager_instance) |*am| {
-            am.deinit();
-        }
-    }
-    log.info("Atlas Created.", .{});
+    errdefer if (atlas_manager_instance) |*am| {
+        am.deinit();
+    };
 
     drawable_entity_list = ArrayList(rendering.DrawableEntity).init(allocator);
+    errdefer drawable_entity_list.deinit();
 
     updateAndDrawLoadingStatus("Spawning Entities...", .{});
     entity_spawner.spawnInitialEntities(&world, &game_prng_iface);
@@ -222,6 +255,7 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
 }
 
 fn shutdownGame(allocator: std_full.mem.Allocator) void {
+    // ... (shutdownGame remains the same as your working version) ...
     _ = allocator;
     log.info("Shutting down game systems...", .{});
 
@@ -229,24 +263,33 @@ fn shutdownGame(allocator: std_full.mem.Allocator) void {
         ray.unloadTexture(tex);
         ziggy_logo_texture = null;
     }
-    drawable_entity_list.deinit();
+
+    if (drawable_entity_list.items.len > 0) { // Check if initialized
+        drawable_entity_list.deinit();
+    }
+
     if (atlas_manager_instance) |*am| {
         am.deinit();
         atlas_manager_instance = null;
     }
 
-    ray.unloadRenderTexture(static_world_texture);
-    world.deinit();
+    if (static_world_texture.id > 0) { // Check if loaded
+        ray.unloadRenderTexture(static_world_texture);
+    }
+
+    if (world.tiles.len > 0) { // Check if initialized
+        world.deinit();
+    }
 
     if (audio_stream_loaded) {
         ray.stopAudioStream(background_audio_stream);
         ray.unloadAudioStream(background_audio_stream);
-        audio_stream_loaded = false;
     }
-    ray.unloadWave(ogg_wave_info);
-    if (ogg_file_data.len > 0) {
+    if (ogg_wave_info.frameCount > 0) { // Check if loaded
+        ray.unloadWave(ogg_wave_info);
+    }
+    if (ogg_file_data.len > 0) { // Check if loaded
         ray.unloadFileData(ogg_file_data);
-        ogg_file_data = &.{};
     }
     log.info("Game systems shut down.", .{});
 }
@@ -258,75 +301,37 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
     current_mouse_screen_pos = ray.getMousePosition();
     const mouse_world_pos = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
 
-    peon_move_timer += 1;
-    animal_move_timer += 1;
+    // REMOVED: peon_move_timer and animal_move_timer
 
     var i_entity: usize = 0;
     while (i_entity < world.entities.items.len) {
-        var entity_ptr = &world.entities.items[i_entity];
+        const entity_ptr = &world.entities.items[i_entity];
 
-        if (entity_ptr.current_hp > 0) {
-            if (entity_ptr.entity_type == .Player or entity_ptr.entity_type == .Sheep or entity_ptr.entity_type == .Bear) {
-                entity_ptr.hp_decay_timer -%= 1;
-                if (entity_ptr.hp_decay_timer == 0) {
-                    const decay_amount = switch (entity_ptr.entity_type) {
-                        .Player => config.hp_decay_amount_peon,
-                        else => config.hp_decay_amount_animal,
-                    };
-                    if (entity_ptr.current_hp > decay_amount) {
-                        entity_ptr.current_hp -= decay_amount;
-                    } else {
-                        entity_ptr.current_hp = 0;
-                    }
-                    entity_ptr.hp_decay_timer = config.hp_decay_interval;
-                }
-            }
+        // HP Decay is now handled at the start of each AI's update function.
+        // AI Updates are called every frame. Internal AI logic (cooldowns) will gate actions.
+        switch (entity_ptr.entity_type) {
+            .Player => peon_ai.updatePeon(entity_ptr, &world, &game_prng_iface),
+            .Sheep => sheep_ai.updateSheep(entity_ptr, &world, &game_prng_iface),
+            .Bear => bear_ai.updateBear(entity_ptr, &world, &game_prng_iface),
+            .Tree, .RockCluster, .Brush => { // Static entities don't have an AI update func yet
+                // Potentially call entity_processing.processHpDecay(entity_ptr) here too if they can decay
+                // For now, assuming they don't decay naturally.
+            },
         }
 
-        if (peon_move_timer >= config.peon_move_interval and entity_ptr.entity_type == .Player) {
-            peon_ai.updatePeon(entity_ptr, &world, &game_prng_iface);
-        }
-        if (animal_move_timer >= config.animal_move_interval_base) {
-            switch (entity_ptr.entity_type) {
-                .Sheep => animal_ai.updateSheep(entity_ptr, &world, &game_prng_iface),
-                .Bear => animal_ai.updateBear(entity_ptr, &world, &game_prng_iface),
-                else => {},
-            }
-        }
-
+        // Death Processing & Entity Removal (check HP *after* AI update which includes decay)
         if (entity_ptr.current_hp == 0) {
             if (!entity_ptr.processed_death_drops) {
-                log.debug("{any} at {d},{d} died. Processing general drops.", .{ entity_ptr.entity_type, entity_ptr.x, entity_ptr.y });
-                // This is a fallback for entities that might die from non-AI actions (e.g. direct player click)
-                // or if AI somehow fails to set processed_death_drops.
-                // AI functions are now primarily responsible for their specific drops.
-                switch (entity_ptr.entity_type) {
-                    .Brush => { // Brush destroyed by player click or other non-AI means
-                        var g: u8 = 0;
-                        while (g < config.grain_drops_from_brush) : (g += 1) {
-                            if (world.findRandomAdjacentEmptyTile(entity_ptr.x, entity_ptr.y, 8, &game_prng_iface)) |drop_pos| {
-                                world.spawnItem(.Grain, drop_pos.x, drop_pos.y);
-                            } else {
-                                world.spawnItem(.Grain, entity_ptr.x, entity_ptr.y);
-                            }
-                        }
-                    },
-                    // Animal drops are handled by their AI, Player drops are TBD
-                    .Player => log.info("Player has died!", .{}),
-                    .Tree, .RockCluster, .Sheep, .Bear => {
-                        // Sheep/Bear AI should have handled this.
-                        // Tree/RockCluster drops are via player click for now.
-                    },
-                }
-                entity_ptr.processed_death_drops = true;
+                entity_processing.processEntityDeath(entity_ptr, &world, &game_prng_iface);
             }
 
-            log.info("{any} at {d},{d} is being removed from world (HP is 0).", .{ entity_ptr.entity_type, entity_ptr.x, entity_ptr.y });
+            log.info("Removing dead entity {any} at {d},{d} from world.", .{ entity_ptr.entity_type, entity_ptr.x, entity_ptr.y });
             _ = world.entities.orderedRemove(i_entity);
-            if (hovered_entity_idx != null and hovered_entity_idx.? >= i_entity) {
-                if (hovered_entity_idx.? == i_entity) {
+
+            if (hovered_entity_idx) |h_idx| {
+                if (h_idx == i_entity) {
                     hovered_entity_idx = null;
-                } else if (hovered_entity_idx.? > i_entity) {
+                } else if (h_idx > i_entity) {
                     hovered_entity_idx.? -= 1;
                 }
             }
@@ -335,27 +340,22 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         i_entity += 1;
     }
 
-    if (peon_move_timer >= config.peon_move_interval) {
-        peon_move_timer = 0;
-    }
-    if (animal_move_timer >= config.animal_move_interval_base) {
-        animal_move_timer = 0;
-    }
+    // REMOVED: Timer reset logic, as timers are removed.
 
     var i_item: usize = 0;
     while (i_item < world.items.items.len) {
-        var item = &world.items.items[i_item];
-        item.decay_timer -%= 1;
-        if (item.decay_timer == 0) {
-            if (item.hp > 1) {
-                item.hp -= 1;
-                item.decay_timer = items.Item.getDecayRateTicks(item.item_type);
+        var item_ptr = &world.items.items[i_item];
+        item_ptr.decay_timer -%= 1;
+        if (item_ptr.decay_timer == 0) {
+            if (item_ptr.hp > 1) {
+                item_ptr.hp -= 1;
+                item_ptr.decay_timer = items_module.Item.getDecayRateTicks(item_ptr.item_type);
             } else {
-                item.hp = 0;
+                item_ptr.hp = 0;
             }
         }
-        if (item.hp == 0) {
-            log.debug("Item {any} at {d},{d} decayed.", .{ item.item_type, item.x, item.y });
+        if (item_ptr.hp == 0) {
+            log.debug("Item {any} at {d},{d} decayed and is being removed.", .{ item_ptr.item_type, item_ptr.x, item_ptr.y });
             _ = world.items.orderedRemove(i_item);
             continue;
         }
@@ -392,6 +392,11 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         camera.target.x += mouse_world_pos_before_zoom.x - mouse_world_pos_after_zoom.x;
         camera.target.y += mouse_world_pos_before_zoom.y - mouse_world_pos_after_zoom.y;
     }
+    if (ray.isMouseButtonDown(ray.MouseButton.middle)) {
+        const delta = ray.getMouseDelta();
+        camera.target.x -= delta.x / camera.zoom;
+        camera.target.y -= delta.y / camera.zoom;
+    }
 
     if (ray.isMouseButtonPressed(ray.MouseButton.left)) {
         var ui_interacted_this_click = false;
@@ -408,35 +413,29 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         if (!ui_interacted_this_click and hovered_entity_idx != null) {
             if (hovered_entity_idx) |entity_idx_to_collect| {
                 if (entity_idx_to_collect < world.entities.items.len) {
-                    var entity_to_interact = &world.entities.items[entity_idx_to_collect];
+                    var entity_to_interact_ptr = &world.entities.items[entity_idx_to_collect];
 
-                    switch (entity_to_interact.entity_type) {
+                    switch (entity_to_interact_ptr.entity_type) {
                         .Tree => {
                             collected_wood += 1;
-                            entity_to_interact.current_hp = 0;
+                            entity_to_interact_ptr.current_hp = 0;
                         },
                         .RockCluster => {
                             collected_rocks += 1;
-                            entity_to_interact.current_hp = 0;
+                            entity_to_interact_ptr.current_hp = 0;
                         },
                         .Brush => {
-                            // Player click now "kills" the brush, which will then drop grain
-                            entity_to_interact.current_hp = 0;
-                            // The collected_brush_items counter will not increment here directly.
-                            // If players should get grain from clicking brush, that needs separate pickup logic.
+                            entity_to_interact_ptr.current_hp = 0;
                         },
-                        .Player, .Sheep, .Bear => {},
+                        .Player, .Sheep, .Bear => {
+                            log.debug("Player clicked on AI entity: {any}", .{entity_to_interact_ptr.entity_type});
+                        },
                     }
                 } else {
                     hovered_entity_idx = null;
                 }
             }
         }
-    }
-    if (ray.isMouseButtonDown(ray.MouseButton.middle)) {
-        const delta = ray.getMouseDelta();
-        camera.target.x -= delta.x / camera.zoom;
-        camera.target.y -= delta.y / camera.zoom;
     }
 
     if (static_world_needs_redraw) {
@@ -447,6 +446,7 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
 
 // Main game drawing logic.
 fn drawGame(allocator: std_full.mem.Allocator) void {
+    // ... (drawGame remains the same) ...
     ray.beginDrawing();
     defer ray.endDrawing();
     ray.clearBackground(config.very_deep_water_color);
@@ -457,13 +457,16 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
 
     if (atlas_manager_instance) |am_instance| {
         rendering.drawItems(&world, &am_instance);
-        // NEW: Call function to draw carried items
-        rendering.drawCarriedItems(&world, &am_instance);
     }
 
     if (atlas_manager_instance) |am_instance| {
         rendering.drawDynamicElementsAndOverlays(&world, &camera, hovered_entity_idx, allocator, &am_instance, &drawable_entity_list);
     }
+
+    if (atlas_manager_instance) |am_instance| {
+        rendering.drawCarriedItems(&world, &am_instance);
+    }
+
     ray.endMode2D();
 
     if (atlas_manager_instance) |am_instance| {
@@ -484,6 +487,7 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
 
 // Main application entry point.
 pub fn main() !void {
+    // ... (main function remains the same as your working version) ...
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
@@ -504,18 +508,25 @@ pub fn main() !void {
     }
 
     updateAndDrawLoadingStatus("Initializing...", .{});
-    for (0..5) |_| {
+    var i: u8 = 0;
+    while (i < 5) : (i += 1) {
         if (ray.windowShouldClose()) {
+            if (ziggy_logo_texture) |tex| ray.unloadTexture(tex);
             return;
         }
         updateAndDrawLoadingStatus("Initializing...", .{});
     }
 
-    try initGame(allocator);
+    initGame(allocator) catch |err| {
+        log.err("Failed to initialize game: {s}. Shutting down.", .{@errorName(err)});
+        shutdownGame(allocator);
+        return;
+    };
 
     updateAndDrawLoadingStatus("Initialization Complete!", .{});
     const frames_to_show_complete: u32 = 30;
-    for (0..frames_to_show_complete) |_| {
+    var frame_count: u32 = 0;
+    while (frame_count < frames_to_show_complete) : (frame_count += 1) {
         if (ray.windowShouldClose()) {
             shutdownGame(allocator);
             return;
@@ -529,5 +540,6 @@ pub fn main() !void {
         updateGame(allocator);
         drawGame(allocator);
     }
+
     shutdownGame(allocator);
 }

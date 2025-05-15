@@ -1,5 +1,6 @@
 // src/items.zig
-// Defines item types and structures for items that can exist in the world or be carried.
+// Defines item types and structures for items that can exist in the world.
+// CarriedItemSlot is now in inventory.zig
 const std = @import("std");
 const config = @import("config.zig");
 
@@ -17,15 +18,15 @@ pub const Item = struct {
     x: i32,
     y: i32,
     item_type: ItemType,
-    hp: i16,
-    decay_timer: u32,
+    hp: i16, // Durability of the item on the ground
+    decay_timer: u32, // Ticks until next HP loss
 
     pub fn getDecayRateTicks(item_type: ItemType) u32 {
         return switch (item_type) {
             .Meat => config.meat_decay_rate_ticks,
             .CorpseSheep => config.corpse_decay_rate_ticks,
             .CorpseBear => config.corpse_decay_rate_ticks,
-            .BrushResource => config.brush_resource_decay_rate_ticks, // Might be short if it converts to grain quickly
+            .BrushResource => config.brush_resource_decay_rate_ticks,
             .Log => config.log_decay_rate_ticks,
             .RockItem => config.rock_item_decay_rate_ticks,
             .Grain => config.grain_decay_rate_ticks,
@@ -45,24 +46,12 @@ pub const Item = struct {
     }
 };
 
-pub const CarriedItemSlot = struct {
-    item_type: ?ItemType = null,
-    quantity: u8 = 0,
-
-    pub fn isEmpty(self: CarriedItemSlot) bool {
-        return self.item_type == null or self.quantity == 0;
-    }
-
-    pub fn clear(self: *CarriedItemSlot) void {
-        self.item_type = null;
-        self.quantity = 0;
-    }
-};
+// CarriedItemSlot struct has been moved to inventory.zig
 
 pub fn getItemTypeName(item_type: ItemType) [:0]const u8 {
     return switch (item_type) {
         .Meat => "Meat",
-        .BrushResource => "Brush", // This is the item sheep eat directly from Brush entity for now
+        .BrushResource => "Brush Parts", // Renamed for clarity if it's distinct from Grain
         .Log => "Log",
         .RockItem => "Rock",
         .CorpseSheep => "Sheep Corpse",

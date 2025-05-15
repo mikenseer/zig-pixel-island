@@ -3,8 +3,9 @@
 const std_full = @import("std");
 const config = @import("config.zig");
 const weather = @import("weather.zig");
-const art = @import("art.zig");
-const items = @import("items.zig");
+// const art = @import("art.zig"); // No longer directly needed for art dimensions here
+const items_module = @import("items.zig"); // Renamed to avoid conflict
+const inventory = @import("inventory.zig");
 const log = std_full.log;
 
 const RandomInterface = std_full.Random;
@@ -76,8 +77,9 @@ pub const Entity = struct {
     wander_steps_total: u8 = 0,
     wander_steps_taken: u8 = 0,
     hp_decay_timer: u16 = 0,
-    inventory: [config.max_carry_slots]items.CarriedItemSlot,
+    inventory: [config.max_carry_slots]inventory.CarriedItemSlot,
     processed_death_drops: bool = false,
+    must_complete_wander_step: bool = false,
 
     pub fn newPlayer(x_pos: i32, y_pos: i32) Entity {
         var e = Entity{
@@ -89,6 +91,7 @@ pub const Entity = struct {
             .hp_decay_timer = config.hp_decay_interval,
             .inventory = undefined,
             .processed_death_drops = false,
+            .must_complete_wander_step = false,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -107,6 +110,7 @@ pub const Entity = struct {
             .time_to_next_growth = if (initial_growth_stage < config.max_growth_stage_tree) config.tree_growth_interval else 0,
             .inventory = undefined,
             .processed_death_drops = false,
+            .must_complete_wander_step = false,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -123,6 +127,7 @@ pub const Entity = struct {
             .max_hp = config.default_rock_cluster_hp,
             .inventory = undefined,
             .processed_death_drops = false,
+            .must_complete_wander_step = false,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -140,6 +145,7 @@ pub const Entity = struct {
             .growth_stage = 1,
             .inventory = undefined,
             .processed_death_drops = false,
+            .must_complete_wander_step = false,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -157,6 +163,7 @@ pub const Entity = struct {
             .hp_decay_timer = config.hp_decay_interval,
             .inventory = undefined,
             .processed_death_drops = false,
+            .must_complete_wander_step = false,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -174,72 +181,12 @@ pub const Entity = struct {
             .hp_decay_timer = config.hp_decay_interval,
             .inventory = undefined,
             .processed_death_drops = false,
+            .must_complete_wander_step = false,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
         }
         return e;
-    }
-
-    pub fn getFirstEmptyInventorySlot(self: *const Entity) ?usize {
-        for (self.inventory, 0..) |slot, i| {
-            if (slot.item_type == null) {
-                return i;
-            }
-        }
-        return null;
-    }
-
-    pub fn getFirstOccupiedInventorySlot(self: *const Entity, item_type_filter: ?items.ItemType) ?usize {
-        for (self.inventory, 0..) |slot, i| {
-            if (slot.item_type != null and slot.quantity > 0) {
-                if (item_type_filter == null or slot.item_type == item_type_filter) {
-                    return i;
-                }
-            }
-        }
-        return null;
-    }
-
-    pub fn addToInventory(self: *Entity, item_type: items.ItemType, quantity_to_add: u8) bool {
-        if (quantity_to_add == 0) return true;
-        for (&self.inventory) |*slot| {
-            if (slot.item_type == item_type) {
-                const can_add = config.max_item_stack_size - slot.quantity;
-                const add_amount = @min(quantity_to_add, can_add);
-                if (add_amount > 0) {
-                    slot.quantity += add_amount;
-                    if (add_amount == quantity_to_add) return true;
-                }
-            }
-        }
-        if (self.getFirstEmptyInventorySlot()) |empty_idx| {
-            self.inventory[empty_idx] = .{ .item_type = item_type, .quantity = quantity_to_add };
-            return true;
-        }
-        return false;
-    }
-
-    pub fn removeFromInventory(self: *Entity, slot_idx: usize, quantity_to_remove: u8) u8 {
-        if (slot_idx >= self.inventory.len or self.inventory[slot_idx].item_type == null or quantity_to_remove == 0) {
-            return 0;
-        }
-        const actual_remove_amount = @min(quantity_to_remove, self.inventory[slot_idx].quantity);
-        self.inventory[slot_idx].quantity -= actual_remove_amount;
-        if (self.inventory[slot_idx].quantity == 0) {
-            self.inventory[slot_idx].item_type = null;
-        }
-        return actual_remove_amount;
-    }
-
-    pub fn countInInventory(self: *const Entity, item_type: items.ItemType) u8 {
-        var count: u8 = 0;
-        for (self.inventory) |slot| {
-            if (slot.item_type == item_type) {
-                count += slot.quantity;
-            }
-        }
-        return count;
     }
 };
 
@@ -256,14 +203,14 @@ pub const Cloud = struct {
     speed_x: f32,
 };
 
-pub const WorldPos = struct { x: i32, y: i32 }; // Helper for coordinates
+pub const WorldPos = struct { x: i32, y: i32 };
 
 pub const GameWorld = struct {
     width: u32,
     height: u32,
     tiles: []Tile,
     entities: std_full.ArrayList(Entity),
-    items: std_full.ArrayList(items.Item),
+    items: std_full.ArrayList(items_module.Item), // Using items_module.Item
     allocator: std_full.mem.Allocator,
     elevation_data: []f32 = &.{},
     cloud_system: weather.CloudSystem = undefined,
@@ -291,7 +238,7 @@ pub const GameWorld = struct {
             .height = h,
             .tiles = tile_slice,
             .entities = std_full.ArrayList(Entity).init(allocator_param),
-            .items = std_full.ArrayList(items.Item).init(allocator_param),
+            .items = std_full.ArrayList(items_module.Item).init(allocator_param),
             .allocator = allocator_param,
             .elevation_data = elevation_slice,
             .cloud_system = cloud_sys,
@@ -308,37 +255,34 @@ pub const GameWorld = struct {
         self.elevation_data = &.{};
     }
 
-    pub fn spawnItem(self: *GameWorld, item_type: items.ItemType, x_pos: i32, y_pos: i32) void {
-        const new_item = items.Item{
+    pub fn spawnItem(self: *GameWorld, item_type: items_module.ItemType, x_pos: i32, y_pos: i32) void {
+        const new_item = items_module.Item{
             .x = x_pos,
             .y = y_pos,
             .item_type = item_type,
-            .hp = items.Item.getInitialHp(item_type),
-            .decay_timer = items.Item.getDecayRateTicks(item_type),
+            .hp = items_module.Item.getInitialHp(item_type),
+            .decay_timer = items_module.Item.getDecayRateTicks(item_type),
         };
         self.items.append(new_item) catch |err| {
             log.err("Failed to spawn item {any} at {d},{d}: {s}", .{ item_type, x_pos, y_pos, @errorName(err) });
         };
     }
 
-    // NEW: Helper to find a random adjacent empty tile for item drops
     pub fn findRandomAdjacentEmptyTile(
         self: *const GameWorld,
         center_x: i32,
         center_y: i32,
-        max_attempts_per_spot: u32, // How many times to try finding an empty spot around the center
+        max_attempts_per_spot: u32,
         prng: *RandomInterface,
     ) ?WorldPos {
-        // Define 8 adjacent offsets (including diagonals)
         const offsets = [_]WorldPos{
             .{ .x = -1, .y = -1 }, .{ .x = 0, .y = -1 }, .{ .x = 1, .y = -1 },
             .{ .x = -1, .y = 0 },  .{ .x = 1, .y = 0 },  .{ .x = -1, .y = 1 },
             .{ .x = 0, .y = 1 },   .{ .x = 1, .y = 1 },
         };
 
-        // Shuffle offsets to try them in a random order
-        var shuffled_offsets = offsets; // Create a mutable copy
-        prng.shuffle(WorldPos, &shuffled_offsets); // Shuffle the offsets array
+        var shuffled_offsets = offsets;
+        prng.shuffle(WorldPos, &shuffled_offsets);
 
         var attempts: u32 = 0;
         while (attempts < max_attempts_per_spot and attempts < shuffled_offsets.len) {
@@ -346,22 +290,17 @@ pub const GameWorld = struct {
             const try_x = center_x + offset.x;
             const try_y = center_y + offset.y;
 
-            // Check bounds
             if (try_x < 0 or @as(u32, @intCast(try_x)) >= self.width or
                 try_y < 0 or @as(u32, @intCast(try_y)) >= self.height)
             {
                 attempts += 1;
-                continue; // Out of bounds
+                continue;
             }
 
-            // Check if tile is occupied by a static entity (trees, rocks, brush)
-            // We might also want to check if another *item* is already there if we want 1 item per tile.
-            // For now, just check static entities.
             if (!self.isTileOccupiedByStaticEntity(try_x, try_y)) {
-                // Also check if terrain is passable for an item (e.g., not deep water)
                 if (self.getTile(try_x, try_y)) |tile| {
                     switch (tile.base_terrain) {
-                        .VeryDeepWater, .DeepWater, .Mountain => { // Items shouldn't land in very deep water or on mountains
+                        .VeryDeepWater, .DeepWater, .Mountain => {
                             attempts += 1;
                             continue;
                         },
@@ -371,7 +310,7 @@ pub const GameWorld = struct {
             }
             attempts += 1;
         }
-        return null; // No suitable empty spot found
+        return null;
     }
 
     pub fn getTile(self: *const GameWorld, x: i32, y: i32) ?*const Tile {
@@ -397,7 +336,7 @@ pub const GameWorld = struct {
         entity_type: EntityType,
         target_tile_x: i32,
         target_tile_y: i32,
-        entity_art_height: u32,
+        entity_art_height: u32, // This is the art height, not config.player_height_pixels directly
     ) TerrainMovementRules {
         var rules: TerrainMovementRules = .{ .can_pass = false, .speed_modifier = 1.0 };
 
@@ -406,23 +345,33 @@ pub const GameWorld = struct {
         const target_terrain = target_tile_opt.?.base_terrain;
 
         if (self.isTileOccupiedByStaticEntity(target_tile_x, target_tile_y)) {
+            // Allow movement on paths/roads even if a static entity (like a dropped item, not a tree) is there.
+            // This check might need refinement if static entities can block paths.
             if (entity_type == .Player and (target_terrain == .DirtPath or target_terrain == .CobblestoneRoad)) {} else {
                 return rules;
             }
         }
 
+        // Check based on the foot of the entity if its art is taller than 1 pixel
         if (entity_art_height > 1) {
-            const foot_y = target_tile_y + @as(i32, @intCast(entity_art_height)) - 1;
-            if (self.getTile(target_tile_x, foot_y)) |foot_tile| {
-                const foot_terrain = foot_tile.base_terrain;
-                switch (entity_type) {
-                    .Player => if (foot_terrain == .VeryDeepWater or foot_terrain == .DeepWater or foot_terrain == .Mountain or foot_terrain == .Rock) return rules,
-                    .Sheep => if (foot_terrain == .VeryDeepWater or foot_terrain == .DeepWater or foot_terrain == .ShallowWater or foot_terrain == .Rock) return rules,
-                    .Bear => if (foot_terrain == .Mountain or foot_terrain == .Rock) return rules,
-                    else => {},
-                }
-            } else {
-                return rules;
+            // The foot_y calculation should be relative to the entity's origin (y),
+            // not target_tile_y, if entity_art_height is used for collision.
+            // However, for simple tile-based movement, target_tile_y is the tile we are checking.
+            // If entity_art_height is the visual height, and y is the base, then foot is at y.
+            // Let's assume target_tile_y is the tile the entity's base wants to move to.
+            // The check here is more about whether the *type* of entity can traverse the *type* of terrain.
+            // The art_height parameter is more for visual alignment or complex collision later.
+            // For now, the terrain type of the target_tile_y is the primary concern.
+            // The original logic for foot_y was: target_tile_y + @as(i32, @intCast(entity_art_height)) - 1;
+            // This assumes y is the top of the sprite. If y is the bottom, it's just target_tile_y.
+            // Let's assume y is the base/foot of the entity for now.
+            const foot_terrain_to_check = target_terrain; // Check the terrain of the tile the entity's base will be on.
+
+            switch (entity_type) {
+                .Player => if (foot_terrain_to_check == .VeryDeepWater or foot_terrain_to_check == .DeepWater or foot_terrain_to_check == .Mountain or foot_terrain_to_check == .Rock) return rules,
+                .Sheep => if (foot_terrain_to_check == .VeryDeepWater or foot_terrain_to_check == .DeepWater or foot_terrain_to_check == .ShallowWater or foot_terrain_to_check == .Rock or foot_terrain_to_check == .Mountain) return rules, // Sheep avoid mountains too
+                .Bear => if (foot_terrain_to_check == .Mountain or foot_terrain_to_check == .Rock) return rules, // Bears might be okay in shallow/deep water
+                else => {},
             }
         }
 
@@ -444,14 +393,14 @@ pub const GameWorld = struct {
             },
             .Bear => {
                 rules.can_pass = switch (target_terrain) {
-                    .VeryDeepWater, .Mountain, .Rock => false,
+                    .VeryDeepWater, .Mountain, .Rock => false, // Bears avoid very deep water, mountains, rocks
                     else => true,
                 };
-                if (rules.can_pass and target_terrain == .DeepWater) {
-                    rules.speed_modifier = config.bear_deep_water_speed_modifier;
+                if (rules.can_pass and (target_terrain == .DeepWater or target_terrain == .ShallowWater)) { // Bears slowed in any water
+                    rules.speed_modifier = config.bear_deep_water_speed_modifier; // Assuming this modifier applies to any water for bears
                 }
             },
-            .Tree, .RockCluster, .Brush => rules.can_pass = false,
+            .Tree, .RockCluster, .Brush => rules.can_pass = false, // Static entities cannot "pass"
         }
         return rules;
     }
@@ -485,32 +434,37 @@ pub const GameWorld = struct {
 
             var can_spawn_here = false;
             if (self.getTile(try_x, try_y)) |tile_at_spawn| {
+                // Get art height from config for consistency in spawning logic
                 const art_h_for_check: u32 = switch (entity_type) {
                     .Player => config.player_height_pixels,
-                    .Sheep => art.sheep_art_height,
-                    .Bear => art.bear_art_height,
-                    else => 1,
+                    .Sheep => config.sheep_art_height, // Using config
+                    .Bear => config.bear_art_height, // Using config
+                    // For static entities, art height for collision might not be relevant for basic spawn check,
+                    // but if it were, they'd also be in config. For now, assume 1 for simplicity if not Player/Sheep/Bear.
+                    .Tree => config.seedling_art_height, // Example: use smallest tree height
+                    .RockCluster => config.rock_cluster_art_height,
+                    .Brush => config.brush_art_height,
                 };
                 const rules = self.getTerrainMovementRules(entity_type, try_x, try_y, art_h_for_check);
                 switch (entity_type) {
                     .Player, .Sheep, .Bear => {
-                        if (rules.can_pass) {
-                            can_spawn_here = switch (tile_at_spawn.base_terrain) {
-                                .Grass, .Sand, .Plains => true,
-                                else => false,
-                            };
+                        if (rules.can_pass) { // Movement rules already check terrain passability
+                            can_spawn_here = true;
                         }
                     },
                     .Tree => {
+                        // Trees can spawn on Grass, not on occupied tiles.
                         can_spawn_here = (tile_at_spawn.base_terrain == .Grass and !self.isTileOccupiedByStaticEntity(try_x, try_y));
                     },
                     .RockCluster => {
+                        // Rocks can spawn on various non-water, non-occupied tiles.
                         can_spawn_here = (tile_at_spawn.base_terrain != .DeepWater and
                             tile_at_spawn.base_terrain != .ShallowWater and
                             tile_at_spawn.base_terrain != .VeryDeepWater and
                             !self.isTileOccupiedByStaticEntity(try_x, try_y));
                     },
                     .Brush => {
+                        // Brush can spawn on Plains, Grass, Sand, not on occupied tiles.
                         can_spawn_here = (tile_at_spawn.base_terrain == .Plains or
                             tile_at_spawn.base_terrain == .Grass or
                             tile_at_spawn.base_terrain == .Sand) and
