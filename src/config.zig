@@ -8,6 +8,7 @@ pub const screen_width: c_int = 500;
 pub const screen_height: c_int = 500;
 
 // Terrain Colors
+// ... (colors remain the same)
 pub const very_deep_water_color: ray.Color = .{ .r = 0, .g = 50, .b = 130, .a = 255 };
 pub const deep_water_color: ray.Color = .{ .r = 0, .g = 80, .b = 170, .a = 255 };
 pub const shallow_water_color: ray.Color = .{ .r = 70, .g = 130, .b = 180, .a = 255 };
@@ -39,6 +40,7 @@ pub const brush_color_highlight: ray.Color = .{ .r = 210, .g = 190, .b = 90, .a 
 // --- UI Specific Colors & Styles ---
 pub const static_selection_outline_color: ray.Color = ray.Color.white;
 pub const ai_selection_outline_color: ray.Color = ray.Color.lime;
+pub const item_selection_outline_color: ray.Color = ray.Color.red;
 pub const ui_panel_background_color: ray.Color = .{ .r = 20, .g = 20, .b = 20, .a = 210 };
 pub const ui_panel_text_color: ray.Color = ray.Color.white;
 pub const ui_panel_padding: c_int = 8;
@@ -60,8 +62,7 @@ pub const cloud_offscreen_buffer: i32 = 60;
 pub const background_clear_color: ray.Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
 
 // Game specific constants
-pub const player_height_pixels: u32 = 2; // Height in pixels for player/peon
-pub const peon_move_interval: u32 = 10; // Old timer, AI now controls its own ticks
+pub const player_height_pixels: u32 = 2;
 pub const num_initial_peons: u32 = 100;
 
 // --- Animal Settings ---
@@ -72,7 +73,6 @@ pub const bear_hp: i16 = 50;
 pub const peon_initial_hp: i16 = 100;
 pub const brush_initial_hp: i16 = 10;
 
-pub const animal_move_interval_base: u32 = 15; // Old timer, AI now controls its own ticks
 pub const peon_shallows_speed_modifier: f32 = 0.5;
 pub const bear_deep_water_speed_modifier: f32 = 0.5;
 pub const sheep_move_attempt_chance: f32 = 0.8;
@@ -87,16 +87,12 @@ pub const island_falloff_exponent: f32 = 2.5;
 pub const elevation_power_curve_exponent: f32 = 0.75;
 pub const global_uplift_amount: f32 = 0.1;
 pub const num_quantized_elevation_levels: u32 = 1025;
-
-// --- Terrain Elevation Thresholds (Normalized 0.0 to 1.0) ---
 pub const very_deep_water_elevation_threshold: f32 = 0.1;
 pub const deep_water_elevation_threshold: f32 = 0.18;
 pub const shallow_water_elevation_threshold: f32 = 0.24;
 pub const sand_elevation_threshold: f32 = 0.32;
 pub const grass_elevation_threshold: f32 = 0.55;
 pub const plains_elevation_threshold: f32 = 0.69;
-
-// --- Noise Grid Cell Sizes (for world_gen & entity_spawner) ---
 pub const grid_cell_size_coarse_shape: u32 = 64;
 pub const grid_cell_size_land_elev: u32 = 32;
 pub const grid_cell_size_fine_detail: u32 = 16;
@@ -104,8 +100,6 @@ pub const grid_cell_size_forest_core: u32 = 72;
 pub const grid_cell_size_deforestation: u32 = 80;
 pub const grid_cell_size_rock: u32 = 56;
 pub const grid_cell_size_brush: u32 = 40;
-
-// --- Noise Parameters ---
 pub const shape_octaves: u32 = 4;
 pub const shape_persistence: f32 = 0.45;
 pub const shape_lacunarity: f32 = 2.0;
@@ -132,8 +126,6 @@ pub const brush_octaves: u32 = 3;
 pub const brush_persistence: f32 = 0.5;
 pub const brush_lacunarity: f32 = 2.0;
 pub const brush_deforestation_power_factor: f32 = 0.7;
-
-// --- Entity Spawning Probabilities & Thresholds ---
 pub const grass_tree_base_probability: f32 = 0.45;
 pub const tree_density_threshold: f32 = 0.08;
 pub const tree_spawn_density_power: f32 = 1.05;
@@ -171,7 +163,7 @@ pub const coastal_grass_brush_max_dist_to_sand: u32 = 2;
 pub const coastal_grass_brush_probability: f32 = 0.55;
 pub const coastal_grass_brush_noise_thresh: f32 = 0.45;
 
-// --- Static Entity Art Dimensions (used by spawning, AI for collision checks etc.) ---
+// --- Static Entity Art Dimensions ---
 pub const rock_cluster_art_width = 6;
 pub const rock_cluster_art_height = 6;
 pub const brush_art_width = 5;
@@ -180,7 +172,6 @@ pub const seedling_art_width = 1;
 pub const seedling_art_height = 2;
 pub const sapling_art_width = 3;
 pub const sapling_art_height = 5;
-// NEW: Added missing animal art dimensions from art.zig for config consistency
 pub const sheep_art_width: c_int = 3;
 pub const sheep_art_height: c_int = 2;
 pub const bear_art_width: c_int = 4;
@@ -200,13 +191,27 @@ pub const hp_decay_interval: u16 = 600;
 pub const hp_decay_amount_peon: i16 = 1;
 pub const hp_decay_amount_animal: i16 = 2;
 pub const peon_hunger_threshold_percent: f32 = 0.50;
-pub const animal_hunger_threshold_percent: f32 = 0.75;
-pub const sheep_hunger_threshold_for_grain_percent: f32 = 0.75;
+
+pub const sheep_hp_graze_opportunistic_threshold_percent: f32 = 0.80;
+pub const sheep_hp_seek_food_actively_threshold_percent: f32 = 0.60;
+pub const sheep_brush_opportunistic_sight_radius: f32 = 3.0;
+pub const sheep_hungry_food_sight_radius: f32 = 12.0;
+
+pub const bear_hp_eat_opportunistic_threshold_percent: f32 = 0.80;
+pub const bear_hp_seek_meat_actively_threshold_percent: f32 = 0.60;
+pub const bear_hp_hunt_sheep_threshold_percent: f32 = 0.50;
+pub const bear_hp_hunt_peon_threshold_percent: f32 = 0.40;
+pub const bear_meat_opportunistic_sight_radius: f32 = 5.0;
+pub const bear_meat_hungry_sight_radius: f32 = 36.0;
+pub const bear_hunt_target_sight_radius: f32 = 18.0;
+
 pub const eating_duration_ticks: u16 = 60;
+pub const bear_eating_duration_ticks: u16 = 90;
 pub const attack_cooldown_ticks: u16 = 60;
 pub const harvest_brush_cooldown_ticks: u16 = 60;
 pub const max_carry_slots: usize = 2;
 pub const max_item_stack_size: u8 = 1;
+pub const max_pathing_attempts_before_give_up: u8 = 3; // NEW: How many times to try pathing before giving up on a target
 
 // Item HP and Decay
 pub const meat_initial_hp: i16 = 100;
@@ -224,7 +229,7 @@ pub const grain_decay_rate_ticks: u16 = 300;
 
 // HP Gains from Food
 pub const meat_hp_gain_peon: i16 = 50;
-pub const meat_hp_gain_bear: i16 = 20;
+pub const meat_hp_gain_bear: i16 = 40;
 pub const brush_hp_gain_sheep: i16 = 0;
 pub const grain_hp_gain_sheep: i16 = 15;
 pub const grain_hp_gain_peon: i16 = 5;
@@ -239,10 +244,9 @@ pub const sheep_damage_vs_brush: i16 = 4;
 // Item Drop Quantities
 pub const meat_drops_from_sheep: u8 = 4;
 pub const meat_drops_from_bear: u8 = 8;
-pub const grain_drops_from_brush: u8 = 1;
+pub const grain_drops_from_brush: u8 = 3;
 
-// AI Sensing Radii (in tiles/pixels)
+// AI Sensing Radii (General - specific ones above take precedence)
 pub const peon_food_sight_radius: f32 = 15.0;
 pub const peon_hunt_sight_radius: f32 = 20.0;
-pub const animal_food_sight_radius: f32 = 10.0;
 pub const animal_threat_sight_radius: f32 = 12.0;

@@ -11,9 +11,9 @@ const ArrayList = std_full.ArrayList;
 const Allocator = std_full.mem.Allocator;
 const log = std_full.log;
 const atlas_manager = @import("atlas_manager.zig");
-const items = @import("items.zig");
+const items_module = @import("items.zig"); // Renamed to avoid conflict
 
-// ... (terrainToRaylibColor, EntityMetrics, getEntityMetrics, redrawStaticWorldTexture, drawEntityFromAtlas, drawItems, DrawableEntity, DrawLayer, lessThanDrawableEntities remain the same) ...
+// ... (terrainToRaylibColor, EntityMetrics, getEntityMetrics, redrawStaticWorldTexture, drawEntityFromAtlas remain same)
 fn terrainToRaylibColor(terrain: types.TerrainType, is_overlay: bool) ray.Color {
     _ = is_overlay;
     return switch (terrain) {
@@ -63,12 +63,10 @@ pub fn getEntityMetrics(entity: types.Entity, am: *const atlas_manager.AtlasMana
             w = @as(c_int, @intFromFloat(math.round(sprite_info.source_rect.width)));
             h = @as(c_int, @intFromFloat(math.round(sprite_info.source_rect.height)));
         } else {
-            log.warn("SpriteInfo not found for {any} in getEntityMetrics, using fallback dimensions.", .{sprite_id});
             w = 1;
             h = 1;
         }
     } else {
-        log.warn("Could not determine SpriteId for entity type {any} in getEntityMetrics.", .{entity.entity_type});
         w = 1;
         h = 1;
     }
@@ -81,25 +79,18 @@ pub fn getEntityMetrics(entity: types.Entity, am: *const atlas_manager.AtlasMana
         .RockCluster, .Brush => {
             ax = 0.0;
             ay = 0.0;
-        },
+        }, // Typically anchored at top-left or bottom-left
         .Player, .Sheep, .Bear => {
             ax = 0.5;
             ay = 1.0;
-        },
+        }, // Anchored at bottom-center
     }
 
     const rect_x = @as(f32, @floatFromInt(entity.x)) - (@as(f32, @floatFromInt(w)) * ax);
     const rect_y = @as(f32, @floatFromInt(entity.y)) - (@as(f32, @floatFromInt(h)) * ay);
 
-    const opt_rect = ray.Rectangle{
-        .x = rect_x,
-        .y = rect_y,
-        .width = @as(f32, @floatFromInt(w)),
-        .height = @as(f32, @floatFromInt(h)),
-    };
-
     return EntityMetrics{
-        .rect = opt_rect,
+        .rect = ray.Rectangle{ .x = rect_x, .y = rect_y, .width = @as(f32, @floatFromInt(w)), .height = @as(f32, @floatFromInt(h)) },
         .art_width = w,
         .art_height = h,
         .anchor_x_factor = ax,
@@ -108,6 +99,7 @@ pub fn getEntityMetrics(entity: types.Entity, am: *const atlas_manager.AtlasMana
 }
 
 pub fn redrawStaticWorldTexture(world: *const types.GameWorld, target_texture: ray.RenderTexture2D) void {
+    // ... (redrawStaticWorldTexture remains same)
     ray.beginTextureMode(target_texture);
     defer ray.endTextureMode();
     ray.clearBackground(ray.Color.blank);
@@ -126,6 +118,7 @@ pub fn redrawStaticWorldTexture(world: *const types.GameWorld, target_texture: r
 }
 
 fn drawEntityFromAtlas(entity: types.Entity, am: *const atlas_manager.AtlasManager, metrics: EntityMetrics) void {
+    // ... (drawEntityFromAtlas remains same)
     const sprite_id: ?atlas_manager.SpriteId = switch (entity.entity_type) {
         .Tree => switch (entity.growth_stage) {
             0 => .TreeSeedling,
@@ -145,28 +138,63 @@ fn drawEntityFromAtlas(entity: types.Entity, am: *const atlas_manager.AtlasManag
             if (metrics.rect) |dest_rect| {
                 const dest_pos = ray.Vector2{ .x = dest_rect.x, .y = dest_rect.y };
                 ray.drawTextureRec(am.atlas_texture, sprite_info.source_rect, dest_pos, ray.Color.white);
-            } else {
-                log.warn("Metrics rect not found for drawing entity {any}", .{id});
             }
-        } else {
-            log.warn("SpriteInfo not found for SpriteId: {any}", .{id});
         }
-    } else {
-        log.warn("Could not determine SpriteId for entity type: {any}", .{entity.entity_type});
     }
 }
 
-pub fn drawItems(world: *const types.GameWorld, am: *const atlas_manager.AtlasManager) void {
-    for (world.items.items) |item| {
-        const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(item.item_type);
-        if (am.getSpriteInfo(sprite_id)) |sprite_info| {
-            const item_w = sprite_info.source_rect.width;
-            const item_h = sprite_info.source_rect.height;
-            const dest_x = @as(f32, @floatFromInt(item.x)) + 0.5 - (item_w / 2.0);
-            const dest_y = @as(f32, @floatFromInt(item.y)) + 0.5 - (item_h / 2.0);
-            const dest_pos = ray.Vector2{ .x = dest_x, .y = dest_y };
-            ray.drawTextureRec(am.atlas_texture, sprite_info.source_rect, dest_pos, ray.Color.white);
-        } else {
+// NEW: Helper to get the screen rectangle for an item for hover detection and drawing outline
+pub fn getItemScreenRect(item: items_module.Item, am: *const atlas_manager.AtlasManager) ?ray.Rectangle {
+    const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(item.item_type);
+    if (am.getSpriteInfo(sprite_id)) |sprite_info| {
+        const item_w = sprite_info.source_rect.width;
+        const item_h = sprite_info.source_rect.height;
+        // Items are drawn centered on their tile
+        const rect_x = @as(f32, @floatFromInt(item.x)) + 0.5 - (item_w / 2.0);
+        const rect_y = @as(f32, @floatFromInt(item.y)) + 0.5 - (item_h / 2.0);
+        return ray.Rectangle{
+            .x = rect_x,
+            .y = rect_y,
+            .width = item_w,
+            .height = item_h,
+        };
+    }
+    return null; // Fallback if no sprite info (e.g., for a simple pixel draw)
+}
+
+pub fn drawItems(
+    world: *const types.GameWorld,
+    am: *const atlas_manager.AtlasManager,
+    hovered_item_idx: ?usize, // NEW
+    camera_ptr: *const ray.Camera2D, // NEW for line thickness
+) void {
+    for (world.items.items, 0..) |item, idx| {
+        if (getItemScreenRect(item, am)) |item_rect| {
+            const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(item.item_type);
+            if (am.getSpriteInfo(sprite_id)) |sprite_info| {
+                const dest_pos = ray.Vector2{ .x = item_rect.x, .y = item_rect.y };
+                ray.drawTextureRec(am.atlas_texture, sprite_info.source_rect, dest_pos, ray.Color.white);
+
+                // Draw red outline if hovered
+                if (hovered_item_idx != null and hovered_item_idx.? == idx) {
+                    var line_thickness: f32 = 1.0;
+                    if (camera_ptr.zoom != 0) {
+                        line_thickness = 1.0 / camera_ptr.zoom;
+                    }
+                    ray.drawRectangleLinesEx(item_rect, line_thickness, config.item_selection_outline_color);
+                }
+            } else { // Fallback if no sprite info
+                const fallback_color = switch (item.item_type) {
+                    .Meat => ray.Color.red,
+                    .BrushResource => ray.Color.yellow,
+                    .Log => ray.Color.brown,
+                    .RockItem => ray.Color.gray,
+                    .CorpseSheep, .CorpseBear => ray.Color.dark_gray,
+                    .Grain => ray.Color.gold,
+                };
+                ray.drawPixel(item.x, item.y, fallback_color);
+            }
+        } else { // Fallback if even rect couldn't be determined (e.g. 1x1 pixel items)
             const fallback_color = switch (item.item_type) {
                 .Meat => ray.Color.red,
                 .BrushResource => ray.Color.yellow,
@@ -176,56 +204,20 @@ pub fn drawItems(world: *const types.GameWorld, am: *const atlas_manager.AtlasMa
                 .Grain => ray.Color.gold,
             };
             ray.drawPixel(item.x, item.y, fallback_color);
-            log.warn("SpriteInfo not found for item type {any}, drawing fallback pixel.", .{item.item_type});
-        }
-    }
-}
 
-// NEW: Function to draw items carried by entities
-pub fn drawCarriedItems(world: *const types.GameWorld, am: *const atlas_manager.AtlasManager) void {
-    for (world.entities.items) |entity| {
-        // Check only the first inventory slot for now, as per current design (1 item carried)
-        if (entity.inventory[0].item_type) |carried_item_type| {
-            if (entity.inventory[0].quantity > 0) {
-                const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(carried_item_type);
-                if (am.getSpriteInfo(sprite_id)) |sprite_info| {
-                    // Determine position below the "head"
-                    // This requires knowing the entity's art and where its "head" is.
-                    // This is a simplified positioning.
-                    var item_offset_x: f32 = 0.0;
-                    var item_offset_y: f32 = 0.0;
-
-                    // Get entity metrics to know its drawing rectangle
-                    const metrics = getEntityMetrics(entity, am);
-
-                    switch (entity.entity_type) {
-                        .Player => { // 1x2, head is top pixel (y), item below means y + 1
-                            item_offset_x = metrics.rect.?.x; // Align with entity's x
-                            item_offset_y = metrics.rect.?.y + @as(f32, @floatFromInt(art.peon_art_height)); // Below the entity sprite
-                        },
-                        .Sheep => { // 3wx2h, head is top row. Item below head means y + 1 (world coords)
-                            // Assuming sheep sprite anchor is bottom-center (metrics.anchor_y_factor = 1.0)
-                            // metrics.rect.y is the top of the sprite. Head is at metrics.rect.y.
-                            // Item below head is at metrics.rect.y + 1 (pixel below head row)
-                            // Centered horizontally with the sheep
-                            item_offset_x = metrics.rect.?.x + (@as(f32, @floatFromInt(art.sheep_art_width)) / 2.0) - (sprite_info.source_rect.width / 2.0);
-                            item_offset_y = metrics.rect.?.y + 1.0; // One pixel below the top row of sheep art
-                        },
-                        .Bear => { // 4wx3h, head is top row.
-                            item_offset_x = metrics.rect.?.x + (@as(f32, @floatFromInt(art.bear_art_width)) / 2.0) - (sprite_info.source_rect.width / 2.0);
-                            item_offset_y = metrics.rect.?.y + 1.0; // One pixel below the top row of bear art
-                        },
-                        else => continue, // Only draw for these types for now
-                    }
-
-                    const dest_pos = ray.Vector2{ .x = item_offset_x, .y = item_offset_y };
-                    ray.drawTextureRec(am.atlas_texture, sprite_info.source_rect, dest_pos, ray.Color.white);
+            // Draw red outline for 1x1 pixel items if hovered
+            if (hovered_item_idx != null and hovered_item_idx.? == idx) {
+                var line_thickness: f32 = 1.0;
+                if (camera_ptr.zoom != 0) {
+                    line_thickness = 1.0 / camera_ptr.zoom;
                 }
+                ray.drawRectangleLinesEx(.{ .x = @as(f32, @floatFromInt(item.x)), .y = @as(f32, @floatFromInt(item.y)), .width = 1.0, .height = 1.0 }, line_thickness, config.item_selection_outline_color);
             }
         }
     }
 }
 
+// ... (DrawableEntity, DrawLayer, lessThanDrawableEntities remain same) ...
 pub const DrawableEntity = struct {
     entity_ptr: ?*const types.Entity = null,
     cloud_ptr: ?*const types.Cloud = null,
@@ -268,6 +260,7 @@ pub fn drawDynamicElementsAndOverlays(
     atlas_manager_ptr: *const atlas_manager.AtlasManager,
     draw_list: *ArrayList(DrawableEntity),
 ) void {
+    // ... (drawDynamicElementsAndOverlays remains same, but ensure it calls getEntityMetrics correctly) ...
     _ = allocator;
     draw_list.shrinkRetainingCapacity(0);
 
@@ -395,17 +388,18 @@ pub fn drawDynamicElementsAndOverlays(
         }
     }
 
+    // Draw hovered entity outline (if any, and if no item is hovered or entity takes precedence)
     if (hovered_entity_idx) |h_idx| {
         if (h_idx < world.entities.items.len) {
             const entity = world.entities.items[h_idx];
             var metrics_for_hover: ?EntityMetrics = null;
-            for (draw_list.items) |*item| {
-                if (item.entity_ptr != null and @intFromPtr(item.entity_ptr) == @intFromPtr(&world.entities.items[h_idx])) {
-                    metrics_for_hover = item.metrics;
+            for (draw_list.items) |*item_in_draw_list| { // Use a different name for item in draw_list
+                if (item_in_draw_list.entity_ptr != null and @intFromPtr(item_in_draw_list.entity_ptr) == @intFromPtr(&world.entities.items[h_idx])) {
+                    metrics_for_hover = item_in_draw_list.metrics;
                     break;
                 }
             }
-            if (metrics_for_hover == null) {
+            if (metrics_for_hover == null) { // Fallback if not found in draw_list (should be rare)
                 metrics_for_hover = getEntityMetrics(entity, atlas_manager_ptr);
             }
 
@@ -419,6 +413,40 @@ pub fn drawDynamicElementsAndOverlays(
                     .Tree, .RockCluster, .Brush => config.static_selection_outline_color,
                 };
                 ray.drawRectangleLinesEx(entity_rect_for_hover, line_thickness, outline_color);
+            }
+        }
+    }
+}
+
+// drawCarriedItems remains the same
+pub fn drawCarriedItems(world: *const types.GameWorld, am: *const atlas_manager.AtlasManager) void {
+    for (world.entities.items) |entity| {
+        if (entity.inventory[0].item_type) |carried_item_type| {
+            if (entity.inventory[0].quantity > 0) {
+                const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(carried_item_type);
+                if (am.getSpriteInfo(sprite_id)) |sprite_info| {
+                    var item_offset_x: f32 = 0.0;
+                    var item_offset_y: f32 = 0.0;
+                    const metrics = getEntityMetrics(entity, am);
+
+                    switch (entity.entity_type) {
+                        .Player => {
+                            item_offset_x = metrics.rect.?.x;
+                            item_offset_y = metrics.rect.?.y + @as(f32, @floatFromInt(config.player_height_pixels));
+                        },
+                        .Sheep => {
+                            item_offset_x = metrics.rect.?.x + (@as(f32, @floatFromInt(config.sheep_art_width)) / 2.0) - (sprite_info.source_rect.width / 2.0);
+                            item_offset_y = metrics.rect.?.y + 1.0;
+                        },
+                        .Bear => {
+                            item_offset_x = metrics.rect.?.x + (@as(f32, @floatFromInt(config.bear_art_width)) / 2.0) - (sprite_info.source_rect.width / 2.0);
+                            item_offset_y = metrics.rect.?.y + 1.0;
+                        },
+                        else => continue,
+                    }
+                    const dest_pos = ray.Vector2{ .x = item_offset_x, .y = item_offset_y };
+                    ray.drawTextureRec(am.atlas_texture, sprite_info.source_rect, dest_pos, ray.Color.white);
+                }
             }
         }
     }

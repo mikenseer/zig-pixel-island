@@ -1,10 +1,9 @@
 // src/animal_ai.zig
 // Shared utility functions for animal AI (Sheep, Bear).
-// Specific update functions (updateSheep, updateBear) are now in their own files.
 const std_full = @import("std");
 const types = @import("types.zig");
 const config = @import("config.zig");
-const art = @import("art.zig"); // For art dimensions
+const art = @import("art.zig");
 const log = std_full.log;
 const math = std_full.math;
 const RandomInterface = std_full.Random;
@@ -22,7 +21,6 @@ pub fn distSq(x1: i32, y1: i32, x2: i32, y2: i32) i64 {
 }
 
 // Helper to choose a new random wander target for an entity
-// This is now a general utility. The calling AI sets the current_action.
 pub fn chooseNewWanderTarget(entity: *types.Entity, prng: *RandomInterface, world_width: u32, world_height: u32) void {
     const steps = prng.intRangeAtMost(u8, config.min_wander_steps, config.max_wander_steps);
     const direction = prng.intRangeAtMost(u8, 0, 7);
@@ -59,13 +57,11 @@ pub fn chooseNewWanderTarget(entity: *types.Entity, prng: *RandomInterface, worl
     entity.wander_steps_total = steps + prng.intRangeAtMost(u8, 0, @divTrunc(steps, 2));
     entity.move_cooldown_ticks = 0;
 
-    // Clear specific interaction targets when choosing a general wander target.
-    // This is important if the wander is due to failed seeking or general idling.
     if (entity.current_action == .Idle or entity.current_action == .SeekingFood or entity.current_action == .Wandering) {
         entity.target_entity_idx = null;
         entity.target_item_idx = null;
     }
-    // Log is now in the calling function or specific AI to provide context of *why* wander target was chosen.
+    log.debug("{any} at {d},{d} chose new general wander target: {d},{d} (was {any})", .{ entity.entity_type, entity.x, entity.y, entity.wander_target_x, entity.wander_target_y, entity.current_action });
 }
 
 // Helper for an entity to attempt one step towards its current wander_target_x/y
@@ -83,6 +79,7 @@ pub fn attemptMoveTowardsWanderTarget(entity: *types.Entity, world: *const types
             log.debug("{any} at {d},{d} reached target/destination {d},{d}. Action: {any} -> Idle. Resetting must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, entity.wander_target_x, entity.wander_target_y, entity.current_action });
             entity.current_action = .Idle;
             entity.must_complete_wander_step = false;
+            entity.pathing_attempts_to_current_target = 0;
         }
         return;
     }
@@ -103,18 +100,42 @@ pub fn attemptMoveTowardsWanderTarget(entity: *types.Entity, world: *const types
     }
 
     if (next_x == entity.x and next_y == entity.y and (entity.x != entity.wander_target_x or entity.y != entity.wander_target_y)) {
-        log.debug("{any} at {d},{d} seems stuck trying to reach {d},{d}. Next calculated step {d},{d} is current pos. Reverting to Idle. Resetting must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, entity.wander_target_x, entity.wander_target_y, next_x, next_y });
-        entity.current_action = .Idle;
+        log.debug("{any} at {d},{d} seems stuck. Current action {any}. Target {d},{d}. -> Idle. Resetting must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, entity.current_action, entity.wander_target_x, entity.wander_target_y });
+        if (entity.current_action == .Hunting or entity.current_action == .PickingUpItem) {
+            entity.pathing_attempts_to_current_target += 1;
+            log.debug("... Pathing attempt {d}/{d} for current target.", .{ entity.pathing_attempts_to_current_target, config.max_pathing_attempts_before_give_up });
+            if (entity.pathing_attempts_to_current_target >= config.max_pathing_attempts_before_give_up) {
+                log.info("... Giving up on current target due to being stuck, will choose a general wander.", .{}); // CORRECTED
+                if (entity.current_action == .Hunting and entity.target_entity_idx != null) {
+                    entity.blocked_target_idx = entity.target_entity_idx;
+                    entity.blocked_target_is_item = false;
+                    entity.blocked_target_cooldown = 180;
+                } else if (entity.current_action == .PickingUpItem and entity.target_item_idx != null) {
+                    entity.blocked_target_idx = entity.target_item_idx;
+                    entity.blocked_target_is_item = true;
+                    entity.blocked_target_cooldown = 180;
+                }
+                entity.target_entity_idx = null;
+                entity.target_item_idx = null;
+                chooseNewWanderTarget(entity, prng, world.width, world.height);
+                entity.current_action = .Wandering;
+                entity.must_complete_wander_step = true;
+                entity.pathing_attempts_to_current_target = 0;
+            } else {
+                entity.current_action = .Idle;
+                entity.move_cooldown_ticks = prng.intRangeAtMost(u16, 20, 40);
+            }
+        } else {
+            entity.current_action = .Idle;
+            entity.pathing_attempts_to_current_target = 0;
+        }
         entity.must_complete_wander_step = false;
-        entity.move_cooldown_ticks = prng.intRangeAtMost(u16, 5, 15);
-        entity.target_entity_idx = null;
-        entity.target_item_idx = null;
         return;
     }
 
     const art_h: u32 = switch (entity.entity_type) {
-        .Sheep => art.sheep_art_height,
-        .Bear => art.bear_art_height,
+        .Sheep => config.sheep_art_height,
+        .Bear => config.bear_art_height,
         .Player => config.player_height_pixels,
         else => 1,
     };
@@ -123,10 +144,12 @@ pub fn attemptMoveTowardsWanderTarget(entity: *types.Entity, world: *const types
     if (rules.can_pass) {
         entity.x = next_x;
         entity.y = next_y;
+        entity.pathing_attempts_to_current_target = 0;
+
         if (entity.current_action == .Wandering) {
             entity.wander_steps_taken += 1;
             if (entity.must_complete_wander_step) {
-                log.debug("{any} at {d},{d} completed a 'must_complete_wander_step' by moving. Flag cleared.", .{ entity.entity_type, entity.x, entity.y });
+                log.debug("{any} at {d},{d} completed one 'must_complete_wander_step' by moving. Flag cleared.", .{ entity.entity_type, entity.x, entity.y });
                 entity.must_complete_wander_step = false;
             }
         }
@@ -139,13 +162,37 @@ pub fn attemptMoveTowardsWanderTarget(entity: *types.Entity, world: *const types
         }
     } else {
         if (entity.current_action != .Idle) {
-            log.debug("{any} at {d},{d} move to {d},{d} blocked. Current action: {any}. Becoming Idle. Resetting must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, next_x, next_y, entity.current_action });
+            log.debug("{any} at {d},{d} move to {d},{d} blocked. Current action: {any}. -> Idle. Resetting must_complete_wander_step.", .{ entity.entity_type, entity.x, entity.y, next_x, next_y, entity.current_action });
         }
-        entity.current_action = .Idle;
+        if (entity.current_action == .Hunting or entity.current_action == .PickingUpItem) {
+            entity.pathing_attempts_to_current_target += 1;
+            log.debug("... Pathing attempt {d}/{d} for current target.", .{ entity.pathing_attempts_to_current_target, config.max_pathing_attempts_before_give_up });
+            if (entity.pathing_attempts_to_current_target >= config.max_pathing_attempts_before_give_up) {
+                log.info("... Giving up on current target due to blocked path, will choose a general wander.", .{}); // CORRECTED
+                if (entity.current_action == .Hunting and entity.target_entity_idx != null) {
+                    entity.blocked_target_idx = entity.target_entity_idx;
+                    entity.blocked_target_is_item = false;
+                    entity.blocked_target_cooldown = 180;
+                } else if (entity.current_action == .PickingUpItem and entity.target_item_idx != null) {
+                    entity.blocked_target_idx = entity.target_item_idx;
+                    entity.blocked_target_is_item = true;
+                    entity.blocked_target_cooldown = 180;
+                }
+                entity.target_entity_idx = null;
+                entity.target_item_idx = null;
+                chooseNewWanderTarget(entity, prng, world.width, world.height);
+                entity.current_action = .Wandering;
+                entity.must_complete_wander_step = true;
+                entity.pathing_attempts_to_current_target = 0;
+            } else {
+                entity.current_action = .Idle;
+                entity.move_cooldown_ticks = prng.intRangeAtMost(u16, 20, 40);
+            }
+        } else {
+            entity.current_action = .Idle;
+            entity.pathing_attempts_to_current_target = 0;
+        }
         entity.must_complete_wander_step = false;
-        entity.move_cooldown_ticks = prng.intRangeAtMost(u16, 10, 20);
-        entity.target_entity_idx = null;
-        entity.target_item_idx = null;
     }
 
     if (entity.current_action == .Wandering and entity.wander_steps_taken >= entity.wander_steps_total) {

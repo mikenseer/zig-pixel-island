@@ -3,8 +3,7 @@
 const std_full = @import("std");
 const config = @import("config.zig");
 const weather = @import("weather.zig");
-// const art = @import("art.zig"); // No longer directly needed for art dimensions here
-const items_module = @import("items.zig"); // Renamed to avoid conflict
+const items_module = @import("items.zig");
 const inventory = @import("inventory.zig");
 const log = std_full.log;
 
@@ -80,6 +79,10 @@ pub const Entity = struct {
     inventory: [config.max_carry_slots]inventory.CarriedItemSlot,
     processed_death_drops: bool = false,
     must_complete_wander_step: bool = false,
+    blocked_target_idx: ?usize = null,
+    blocked_target_is_item: bool = false,
+    blocked_target_cooldown: u16 = 0,
+    pathing_attempts_to_current_target: u8 = 0, // NEW: Counter for pathing attempts
 
     pub fn newPlayer(x_pos: i32, y_pos: i32) Entity {
         var e = Entity{
@@ -92,6 +95,7 @@ pub const Entity = struct {
             .inventory = undefined,
             .processed_death_drops = false,
             .must_complete_wander_step = false,
+            .pathing_attempts_to_current_target = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -111,6 +115,7 @@ pub const Entity = struct {
             .inventory = undefined,
             .processed_death_drops = false,
             .must_complete_wander_step = false,
+            .pathing_attempts_to_current_target = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -128,6 +133,7 @@ pub const Entity = struct {
             .inventory = undefined,
             .processed_death_drops = false,
             .must_complete_wander_step = false,
+            .pathing_attempts_to_current_target = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -146,6 +152,7 @@ pub const Entity = struct {
             .inventory = undefined,
             .processed_death_drops = false,
             .must_complete_wander_step = false,
+            .pathing_attempts_to_current_target = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -164,6 +171,7 @@ pub const Entity = struct {
             .inventory = undefined,
             .processed_death_drops = false,
             .must_complete_wander_step = false,
+            .pathing_attempts_to_current_target = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -182,6 +190,7 @@ pub const Entity = struct {
             .inventory = undefined,
             .processed_death_drops = false,
             .must_complete_wander_step = false,
+            .pathing_attempts_to_current_target = 0,
         };
         for (&e.inventory) |*slot| {
             slot.* = .{};
@@ -210,7 +219,7 @@ pub const GameWorld = struct {
     height: u32,
     tiles: []Tile,
     entities: std_full.ArrayList(Entity),
-    items: std_full.ArrayList(items_module.Item), // Using items_module.Item
+    items: std_full.ArrayList(items_module.Item),
     allocator: std_full.mem.Allocator,
     elevation_data: []f32 = &.{},
     cloud_system: weather.CloudSystem = undefined,
@@ -336,7 +345,7 @@ pub const GameWorld = struct {
         entity_type: EntityType,
         target_tile_x: i32,
         target_tile_y: i32,
-        entity_art_height: u32, // This is the art height, not config.player_height_pixels directly
+        entity_art_height: u32,
     ) TerrainMovementRules {
         var rules: TerrainMovementRules = .{ .can_pass = false, .speed_modifier = 1.0 };
 
@@ -345,32 +354,18 @@ pub const GameWorld = struct {
         const target_terrain = target_tile_opt.?.base_terrain;
 
         if (self.isTileOccupiedByStaticEntity(target_tile_x, target_tile_y)) {
-            // Allow movement on paths/roads even if a static entity (like a dropped item, not a tree) is there.
-            // This check might need refinement if static entities can block paths.
             if (entity_type == .Player and (target_terrain == .DirtPath or target_terrain == .CobblestoneRoad)) {} else {
                 return rules;
             }
         }
 
-        // Check based on the foot of the entity if its art is taller than 1 pixel
         if (entity_art_height > 1) {
-            // The foot_y calculation should be relative to the entity's origin (y),
-            // not target_tile_y, if entity_art_height is used for collision.
-            // However, for simple tile-based movement, target_tile_y is the tile we are checking.
-            // If entity_art_height is the visual height, and y is the base, then foot is at y.
-            // Let's assume target_tile_y is the tile the entity's base wants to move to.
-            // The check here is more about whether the *type* of entity can traverse the *type* of terrain.
-            // The art_height parameter is more for visual alignment or complex collision later.
-            // For now, the terrain type of the target_tile_y is the primary concern.
-            // The original logic for foot_y was: target_tile_y + @as(i32, @intCast(entity_art_height)) - 1;
-            // This assumes y is the top of the sprite. If y is the bottom, it's just target_tile_y.
-            // Let's assume y is the base/foot of the entity for now.
-            const foot_terrain_to_check = target_terrain; // Check the terrain of the tile the entity's base will be on.
+            const foot_terrain_to_check = target_terrain;
 
             switch (entity_type) {
                 .Player => if (foot_terrain_to_check == .VeryDeepWater or foot_terrain_to_check == .DeepWater or foot_terrain_to_check == .Mountain or foot_terrain_to_check == .Rock) return rules,
-                .Sheep => if (foot_terrain_to_check == .VeryDeepWater or foot_terrain_to_check == .DeepWater or foot_terrain_to_check == .ShallowWater or foot_terrain_to_check == .Rock or foot_terrain_to_check == .Mountain) return rules, // Sheep avoid mountains too
-                .Bear => if (foot_terrain_to_check == .Mountain or foot_terrain_to_check == .Rock) return rules, // Bears might be okay in shallow/deep water
+                .Sheep => if (foot_terrain_to_check == .VeryDeepWater or foot_terrain_to_check == .DeepWater or foot_terrain_to_check == .ShallowWater or foot_terrain_to_check == .Rock or foot_terrain_to_check == .Mountain) return rules,
+                .Bear => if (foot_terrain_to_check == .Mountain or foot_terrain_to_check == .Rock) return rules,
                 else => {},
             }
         }
@@ -393,14 +388,14 @@ pub const GameWorld = struct {
             },
             .Bear => {
                 rules.can_pass = switch (target_terrain) {
-                    .VeryDeepWater, .Mountain, .Rock => false, // Bears avoid very deep water, mountains, rocks
+                    .VeryDeepWater, .Mountain, .Rock => false,
                     else => true,
                 };
-                if (rules.can_pass and (target_terrain == .DeepWater or target_terrain == .ShallowWater)) { // Bears slowed in any water
-                    rules.speed_modifier = config.bear_deep_water_speed_modifier; // Assuming this modifier applies to any water for bears
+                if (rules.can_pass and (target_terrain == .DeepWater or target_terrain == .ShallowWater)) {
+                    rules.speed_modifier = config.bear_deep_water_speed_modifier;
                 }
             },
-            .Tree, .RockCluster, .Brush => rules.can_pass = false, // Static entities cannot "pass"
+            .Tree, .RockCluster, .Brush => rules.can_pass = false,
         }
         return rules;
     }
@@ -434,37 +429,31 @@ pub const GameWorld = struct {
 
             var can_spawn_here = false;
             if (self.getTile(try_x, try_y)) |tile_at_spawn| {
-                // Get art height from config for consistency in spawning logic
                 const art_h_for_check: u32 = switch (entity_type) {
                     .Player => config.player_height_pixels,
-                    .Sheep => config.sheep_art_height, // Using config
-                    .Bear => config.bear_art_height, // Using config
-                    // For static entities, art height for collision might not be relevant for basic spawn check,
-                    // but if it were, they'd also be in config. For now, assume 1 for simplicity if not Player/Sheep/Bear.
-                    .Tree => config.seedling_art_height, // Example: use smallest tree height
+                    .Sheep => config.sheep_art_height,
+                    .Bear => config.bear_art_height,
+                    .Tree => config.seedling_art_height,
                     .RockCluster => config.rock_cluster_art_height,
                     .Brush => config.brush_art_height,
                 };
                 const rules = self.getTerrainMovementRules(entity_type, try_x, try_y, art_h_for_check);
                 switch (entity_type) {
                     .Player, .Sheep, .Bear => {
-                        if (rules.can_pass) { // Movement rules already check terrain passability
+                        if (rules.can_pass) {
                             can_spawn_here = true;
                         }
                     },
                     .Tree => {
-                        // Trees can spawn on Grass, not on occupied tiles.
                         can_spawn_here = (tile_at_spawn.base_terrain == .Grass and !self.isTileOccupiedByStaticEntity(try_x, try_y));
                     },
                     .RockCluster => {
-                        // Rocks can spawn on various non-water, non-occupied tiles.
                         can_spawn_here = (tile_at_spawn.base_terrain != .DeepWater and
                             tile_at_spawn.base_terrain != .ShallowWater and
                             tile_at_spawn.base_terrain != .VeryDeepWater and
                             !self.isTileOccupiedByStaticEntity(try_x, try_y));
                     },
                     .Brush => {
-                        // Brush can spawn on Plains, Grass, Sand, not on occupied tiles.
                         can_spawn_here = (tile_at_spawn.base_terrain == .Plains or
                             tile_at_spawn.base_terrain == .Grass or
                             tile_at_spawn.base_terrain == .Sand) and

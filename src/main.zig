@@ -25,7 +25,6 @@ const rendering = @import("rendering.zig");
 const peon_ai = @import("peon_ai.zig");
 const ui = @import("ui.zig");
 const atlas_manager = @import("atlas_manager.zig");
-// animal_ai.zig now primarily holds shared utilities for animal AI
 const animal_ai_utils = @import("animal_ai.zig");
 const sheep_ai = @import("sheep_ai.zig");
 const bear_ai = @import("bear_ai.zig");
@@ -42,6 +41,7 @@ var world: types.GameWorld = undefined;
 var atlas_manager_instance: ?atlas_manager.AtlasManager = null;
 var drawable_entity_list: ArrayList(rendering.DrawableEntity) = undefined;
 var ziggy_logo_texture: ?ray.Texture2D = null;
+var is_game_paused: bool = false;
 
 // --- Camera & Input ---
 var camera = ray.Camera2D{
@@ -54,7 +54,8 @@ const min_zoom: f32 = 1.0;
 const max_zoom: f32 = @min(@as(f32, @floatFromInt(config.screen_width)), @as(f32, @floatFromInt(config.screen_height)));
 const zoom_speed_factor: f32 = 0.1;
 var hovered_entity_idx: ?usize = null;
-var current_mouse_screen_pos: ray.Vector2 = .{ .x = 0, .y = 0 };
+var hovered_item_idx: ?usize = null;
+var current_mouse_screen_pos: ray.Vector2 = .{ .x = 0, .y = 0 }; // Correct global declaration
 
 // --- Rendering ---
 var static_world_texture: ray.RenderTexture2D = undefined;
@@ -75,14 +76,11 @@ var is_music_muted: bool = false;
 var music_volume: f32 = 1.0;
 const dummy_audio_byte: u8 = 0;
 
-// --- Timing ---
-// REMOVED: peon_move_timer and animal_move_timer. AI updates are now called every frame.
-
 // --- Loading Screen ---
 var current_loading_status_buffer: [100]u8 = undefined;
 
 fn audioStreamCallback(buffer_ptr: ?*anyopaque, frames_to_process: c_uint) callconv(.C) void {
-    // ... (audioStreamCallback remains the same)
+    // ... (audioStreamCallback from your working version)
     const buffer: [*]i16 = if (buffer_ptr) |ptr| @as([*]i16, @alignCast(@ptrCast(ptr))) else return;
     const samples_to_process = frames_to_process * @as(c_uint, ogg_wave_info.channels);
     var samples_processed: c_uint = 0;
@@ -115,7 +113,7 @@ fn audioStreamCallback(buffer_ptr: ?*anyopaque, frames_to_process: c_uint) callc
 }
 
 fn drawCurrentLoadingScreen(status_text_slice: [:0]const u8) void {
-    // ... (drawCurrentLoadingScreen remains the same) ...
+    // ... (drawCurrentLoadingScreen from your working version) ...
     if (ray.isWindowReady()) {
         ray.beginDrawing();
         defer ray.endDrawing();
@@ -150,7 +148,7 @@ fn drawCurrentLoadingScreen(status_text_slice: [:0]const u8) void {
 }
 
 fn updateAndDrawLoadingStatus(comptime status_fmt: []const u8, args: anytype) void {
-    // ... (updateAndDrawLoadingStatus remains the same) ...
+    // ... (updateAndDrawLoadingStatus from your working version) ...
     @memset(current_loading_status_buffer[0..], @as(u8, 0));
     const status_text_slice = fmt.bufPrintZ(&current_loading_status_buffer, status_fmt, args) catch |err| {
         log.err("Failed to format loading status: {s}", .{@errorName(err)});
@@ -164,7 +162,7 @@ fn updateAndDrawLoadingStatus(comptime status_fmt: []const u8, args: anytype) vo
 }
 
 fn initGame(allocator: std_full.mem.Allocator) !void {
-    // ... (initGame audio loading part remains the same as your working version) ...
+    // ... (initGame audio loading part from your working version) ...
     updateAndDrawLoadingStatus("Loading Audio...", .{});
     ogg_file_data = ray.loadFileData("audio/zigisland.ogg") catch |err| blk: {
         log.warn("Failed to load OGG file data ('audio/zigisland.ogg'): {s}. Audio will be disabled.", .{@errorName(err)});
@@ -255,7 +253,7 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
 }
 
 fn shutdownGame(allocator: std_full.mem.Allocator) void {
-    // ... (shutdownGame remains the same as your working version) ...
+    // ... (shutdownGame from your working version) ...
     _ = allocator;
     log.info("Shutting down game systems...", .{});
 
@@ -264,7 +262,7 @@ fn shutdownGame(allocator: std_full.mem.Allocator) void {
         ziggy_logo_texture = null;
     }
 
-    if (drawable_entity_list.items.len > 0) { // Check if initialized
+    if (drawable_entity_list.items.len > 0) {
         drawable_entity_list.deinit();
     }
 
@@ -273,11 +271,11 @@ fn shutdownGame(allocator: std_full.mem.Allocator) void {
         atlas_manager_instance = null;
     }
 
-    if (static_world_texture.id > 0) { // Check if loaded
+    if (static_world_texture.id > 0) {
         ray.unloadRenderTexture(static_world_texture);
     }
 
-    if (world.tiles.len > 0) { // Check if initialized
+    if (world.tiles.len > 0) {
         world.deinit();
     }
 
@@ -285,10 +283,10 @@ fn shutdownGame(allocator: std_full.mem.Allocator) void {
         ray.stopAudioStream(background_audio_stream);
         ray.unloadAudioStream(background_audio_stream);
     }
-    if (ogg_wave_info.frameCount > 0) { // Check if loaded
+    if (ogg_wave_info.frameCount > 0) {
         ray.unloadWave(ogg_wave_info);
     }
-    if (ogg_file_data.len > 0) { // Check if loaded
+    if (ogg_file_data.len > 0) {
         ray.unloadFileData(ogg_file_data);
     }
     log.info("Game systems shut down.", .{});
@@ -298,76 +296,74 @@ fn shutdownGame(allocator: std_full.mem.Allocator) void {
 fn updateGame(allocator: std_full.mem.Allocator) void {
     _ = allocator;
 
-    current_mouse_screen_pos = ray.getMousePosition();
+    if (ray.isKeyPressed(ray.KeyboardKey.space)) {
+        is_game_paused = !is_game_paused;
+        log.info("Game Paused: {any}", .{is_game_paused});
+    }
+
+    // Update mouse position regardless of pause state for UI interaction
+    current_mouse_screen_pos = ray.getMousePosition(); // Ensure this uses the global variable
     const mouse_world_pos = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
 
-    // REMOVED: peon_move_timer and animal_move_timer
-
-    var i_entity: usize = 0;
-    while (i_entity < world.entities.items.len) {
-        const entity_ptr = &world.entities.items[i_entity];
-
-        // HP Decay is now handled at the start of each AI's update function.
-        // AI Updates are called every frame. Internal AI logic (cooldowns) will gate actions.
-        switch (entity_ptr.entity_type) {
-            .Player => peon_ai.updatePeon(entity_ptr, &world, &game_prng_iface),
-            .Sheep => sheep_ai.updateSheep(entity_ptr, &world, &game_prng_iface),
-            .Bear => bear_ai.updateBear(entity_ptr, &world, &game_prng_iface),
-            .Tree, .RockCluster, .Brush => { // Static entities don't have an AI update func yet
-                // Potentially call entity_processing.processHpDecay(entity_ptr) here too if they can decay
-                // For now, assuming they don't decay naturally.
-            },
-        }
-
-        // Death Processing & Entity Removal (check HP *after* AI update which includes decay)
-        if (entity_ptr.current_hp == 0) {
-            if (!entity_ptr.processed_death_drops) {
-                entity_processing.processEntityDeath(entity_ptr, &world, &game_prng_iface);
+    if (!is_game_paused) {
+        var i_entity: usize = 0;
+        while (i_entity < world.entities.items.len) {
+            const entity_ptr = &world.entities.items[i_entity];
+            switch (entity_ptr.entity_type) {
+                .Player => peon_ai.updatePeon(entity_ptr, &world, &game_prng_iface),
+                .Sheep => sheep_ai.updateSheep(entity_ptr, &world, &game_prng_iface),
+                .Bear => bear_ai.updateBear(entity_ptr, &world, &game_prng_iface),
+                .Tree, .RockCluster, .Brush => {},
             }
 
-            log.info("Removing dead entity {any} at {d},{d} from world.", .{ entity_ptr.entity_type, entity_ptr.x, entity_ptr.y });
-            _ = world.entities.orderedRemove(i_entity);
+            if (entity_ptr.current_hp == 0) {
+                if (!entity_ptr.processed_death_drops) {
+                    entity_processing.processEntityDeath(entity_ptr, &world, &game_prng_iface);
+                }
+                _ = world.entities.orderedRemove(i_entity);
+                if (hovered_entity_idx) |h_idx| {
+                    if (h_idx == i_entity) {
+                        hovered_entity_idx = null;
+                    } else if (h_idx > i_entity) hovered_entity_idx.? -= 1;
+                }
+                continue;
+            }
+            i_entity += 1;
+        }
 
-            if (hovered_entity_idx) |h_idx| {
-                if (h_idx == i_entity) {
-                    hovered_entity_idx = null;
-                } else if (h_idx > i_entity) {
-                    hovered_entity_idx.? -= 1;
+        var i_item: usize = 0;
+        while (i_item < world.items.items.len) {
+            var item_ptr = &world.items.items[i_item];
+            item_ptr.decay_timer -%= 1;
+            if (item_ptr.decay_timer == 0) {
+                if (item_ptr.hp > 1) {
+                    item_ptr.hp -= 1;
+                    item_ptr.decay_timer = items_module.Item.getDecayRateTicks(item_ptr.item_type);
+                } else {
+                    item_ptr.hp = 0;
                 }
             }
-            continue;
-        }
-        i_entity += 1;
-    }
-
-    // REMOVED: Timer reset logic, as timers are removed.
-
-    var i_item: usize = 0;
-    while (i_item < world.items.items.len) {
-        var item_ptr = &world.items.items[i_item];
-        item_ptr.decay_timer -%= 1;
-        if (item_ptr.decay_timer == 0) {
-            if (item_ptr.hp > 1) {
-                item_ptr.hp -= 1;
-                item_ptr.decay_timer = items_module.Item.getDecayRateTicks(item_ptr.item_type);
-            } else {
-                item_ptr.hp = 0;
+            if (item_ptr.hp == 0) {
+                _ = world.items.orderedRemove(i_item);
+                if (hovered_item_idx) |h_idx_item| {
+                    if (h_idx_item == i_item) {
+                        hovered_item_idx = null;
+                    } else if (h_idx_item > i_item) hovered_item_idx.? -= 1;
+                }
+                continue;
             }
+            i_item += 1;
         }
-        if (item_ptr.hp == 0) {
-            log.debug("Item {any} at {d},{d} decayed and is being removed.", .{ item_ptr.item_type, item_ptr.x, item_ptr.y });
-            _ = world.items.orderedRemove(i_item);
-            continue;
-        }
-        i_item += 1;
+        world.cloud_system.update();
     }
 
-    world.cloud_system.update();
-
+    // Hover detection (even if paused)
     hovered_entity_idx = null;
-    var i_hover: usize = world.entities.items.len;
-    while (i_hover > 0) {
-        const current_entity_idx = i_hover - 1;
+    hovered_item_idx = null;
+
+    var i_hover_entity: usize = world.entities.items.len;
+    while (i_hover_entity > 0) {
+        const current_entity_idx = i_hover_entity - 1;
         if (current_entity_idx < world.entities.items.len) {
             const entity = world.entities.items[current_entity_idx];
             if (atlas_manager_instance) |am_instance| {
@@ -380,7 +376,26 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
                 }
             }
         }
-        i_hover -= 1;
+        i_hover_entity -= 1;
+    }
+
+    if (hovered_entity_idx == null) {
+        var i_hover_item: usize = world.items.items.len;
+        while (i_hover_item > 0) {
+            const current_item_idx = i_hover_item - 1;
+            if (current_item_idx < world.items.items.len) {
+                const item = world.items.items[current_item_idx];
+                if (atlas_manager_instance) |am_instance| {
+                    if (rendering.getItemScreenRect(item, &am_instance)) |item_rect| {
+                        if (ray.checkCollisionPointRec(mouse_world_pos, item_rect)) {
+                            hovered_item_idx = current_item_idx;
+                            break;
+                        }
+                    }
+                }
+            }
+            i_hover_item -= 1;
+        }
     }
 
     const wheel_move = ray.getMouseWheelMove();
@@ -398,7 +413,7 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         camera.target.y -= delta.y / camera.zoom;
     }
 
-    if (ray.isMouseButtonPressed(ray.MouseButton.left)) {
+    if (!is_game_paused and ray.isMouseButtonPressed(ray.MouseButton.left)) {
         var ui_interacted_this_click = false;
         if (atlas_manager_instance) |am_instance| {
             if (ui.checkMuteButtonClick(&am_instance, current_mouse_screen_pos)) {
@@ -414,7 +429,6 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
             if (hovered_entity_idx) |entity_idx_to_collect| {
                 if (entity_idx_to_collect < world.entities.items.len) {
                     var entity_to_interact_ptr = &world.entities.items[entity_idx_to_collect];
-
                     switch (entity_to_interact_ptr.entity_type) {
                         .Tree => {
                             collected_wood += 1;
@@ -435,10 +449,14 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
                     hovered_entity_idx = null;
                 }
             }
+        } else if (!ui_interacted_this_click and hovered_item_idx != null) {
+            if (hovered_item_idx) |item_idx_val| {
+                log.debug("Player clicked on item index: {d}", .{item_idx_val});
+            }
         }
     }
 
-    if (static_world_needs_redraw) {
+    if (static_world_needs_redraw and !is_game_paused) {
         rendering.redrawStaticWorldTexture(&world, static_world_texture);
         static_world_needs_redraw = false;
     }
@@ -446,7 +464,7 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
 
 // Main game drawing logic.
 fn drawGame(allocator: std_full.mem.Allocator) void {
-    // ... (drawGame remains the same) ...
+    // ... (drawGame from your working version, ensure current_mouse_screen_pos is used for ui.drawUI) ...
     ray.beginDrawing();
     defer ray.endDrawing();
     ray.clearBackground(config.very_deep_water_color);
@@ -456,7 +474,7 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
     ray.drawTextureRec(static_world_texture.texture, src_rect, .{ .x = 0, .y = 0 }, ray.Color.white);
 
     if (atlas_manager_instance) |am_instance| {
-        rendering.drawItems(&world, &am_instance);
+        rendering.drawItems(&world, &am_instance, hovered_item_idx, &camera);
     }
 
     if (atlas_manager_instance) |am_instance| {
@@ -480,14 +498,16 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
             is_music_muted,
             audio_stream_loaded,
             hovered_entity_idx,
-            current_mouse_screen_pos,
+            hovered_item_idx,
+            current_mouse_screen_pos, // Using the global current_mouse_screen_pos
+            is_game_paused,
         );
     }
 }
 
 // Main application entry point.
 pub fn main() !void {
-    // ... (main function remains the same as your working version) ...
+    // ... (main function from your working version) ...
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 

@@ -6,12 +6,13 @@ const ray = @import("raylib");
 const config = @import("config.zig");
 const types = @import("types.zig");
 const atlas_manager = @import("atlas_manager.zig");
+const items_module = @import("items.zig"); // Renamed to avoid conflict
 const log = std_full.log;
 const math = std_full.math;
 
 const ui_padding: c_int = 10;
-const font_size: c_int = 10; // Default font size for resource/entity counts
-const line_spacing: c_int = 15; // Default line spacing for resource/entity counts
+const font_size: c_int = 10;
+const line_spacing: c_int = 15;
 const text_icon_spacing: c_int = 5;
 
 // Helper function to draw a line of text for a resource, including its icon.
@@ -94,7 +95,7 @@ fn drawTextLine(
 fn drawHoveredEntityStatsPanel(
     allocator: std_full.mem.Allocator,
     entity: types.Entity,
-    mouse_screen_pos: ray.Vector2, // Mouse screen position
+    mouse_screen_pos: ray.Vector2,
 ) !void {
     const panel_padding = config.ui_panel_padding;
     const panel_font_size = config.ui_panel_font_size;
@@ -126,6 +127,8 @@ fn drawHoveredEntityStatsPanel(
         const line3 = fmt.bufPrintZ(&temp_line_buf, "Age: {d}", .{entity.growth_stage}) catch "Age: N/A";
         try text_lines.append(try allocator.dupeZ(u8, line3));
     }
+    const action_line = fmt.bufPrintZ(&temp_line_buf, "Action: {s}", .{@tagName(entity.current_action)}) catch "Action: N/A";
+    try text_lines.append(try allocator.dupeZ(u8, action_line));
 
     var max_text_width: c_int = 0;
     for (text_lines.items) |line_text| {
@@ -138,7 +141,6 @@ fn drawHoveredEntityStatsPanel(
     const panel_width = max_text_width + (panel_padding * 2);
     const panel_height = @as(c_int, @intCast(text_lines.items.len)) * panel_line_spacing - (panel_line_spacing - panel_font_size) + (panel_padding * 2);
 
-    // CORRECTED: Use @intFromFloat after math.round
     var panel_x: c_int = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) + panel_offset_x;
     var panel_y: c_int = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) + panel_offset_y;
 
@@ -162,22 +164,99 @@ fn drawHoveredEntityStatsPanel(
     var temp_draw_buf: [64]u8 = undefined;
 
     for (text_lines.items) |line_text_z| {
-        if (std_full.mem.startsWith(u8, line_text_z, "HP:") or std_full.mem.startsWith(u8, line_text_z, "Age:")) {
+        if (std_full.mem.startsWith(u8, line_text_z, "HP:") or std_full.mem.startsWith(u8, line_text_z, "Age:") or std_full.mem.startsWith(u8, line_text_z, "Action:")) {
             if (std_full.mem.indexOfScalar(u8, line_text_z, ':')) |colon_idx| {
                 const label_part_slice = line_text_z[0 .. colon_idx + 1];
-                const label_draw_str = fmt.bufPrintZ(&temp_draw_buf, "{s}", .{label_part_slice}) catch |e| b: {
+                const label_draw_str = fmt.bufPrintZ(&temp_draw_buf, "{s}", .{label_part_slice}) catch |e| blk: {
                     log.err("fmt label: {s}", .{@errorName(e)});
-                    break :b line_text_z;
+                    break :blk line_text_z;
                 };
                 ray.drawText(label_draw_str, panel_x + panel_padding, current_text_y, panel_font_size, panel_text_color);
 
                 const label_width = ray.measureText(label_draw_str, panel_font_size);
 
                 const value_part_slice = line_text_z[colon_idx + 2 ..];
-                const value_draw_str = fmt.bufPrintZ(&temp_draw_buf, "{s}", .{value_part_slice}) catch |e| b: {
+                const value_draw_str = fmt.bufPrintZ(&temp_draw_buf, "{s}", .{value_part_slice}) catch |e| blk: {
                     log.err("fmt value: {s}", .{@errorName(e)});
-                    break :b "";
+                    break :blk "";
                 };
+                ray.drawText(value_draw_str, panel_x + panel_padding + label_width + 2, current_text_y, panel_font_size, panel_stat_value_color);
+            } else {
+                ray.drawText(line_text_z, panel_x + panel_padding, current_text_y, panel_font_size, panel_text_color);
+            }
+        } else {
+            ray.drawText(line_text_z, panel_x + panel_padding, current_text_y, panel_font_size, panel_text_color);
+        }
+        current_text_y += panel_line_spacing;
+    }
+}
+
+// NEW: Draws the stats panel for a hovered item
+fn drawHoveredItemStatsPanel(
+    allocator: std_full.mem.Allocator,
+    item: items_module.Item,
+    mouse_screen_pos: ray.Vector2,
+) !void {
+    const panel_padding = config.ui_panel_padding;
+    const panel_font_size = config.ui_panel_font_size;
+    const panel_line_spacing = config.ui_panel_line_spacing;
+    const panel_bg_color = config.ui_panel_background_color;
+    const panel_text_color = config.ui_panel_text_color;
+    const panel_stat_value_color = config.ui_panel_stat_value_color;
+    const panel_offset_x = config.ui_panel_mouse_offset_x;
+    const panel_offset_y = config.ui_panel_mouse_offset_y;
+
+    var text_lines = std_full.ArrayList([:0]const u8).init(allocator);
+    defer {
+        for (text_lines.items) |duped_line| {
+            allocator.free(duped_line);
+        }
+        text_lines.deinit();
+    }
+    var temp_line_buf: [128]u8 = undefined;
+
+    const item_type_name = items_module.getItemTypeName(item.item_type);
+    try text_lines.append(try allocator.dupeZ(u8, item_type_name));
+
+    const hp_text = fmt.bufPrintZ(&temp_line_buf, "HP: {d}/{d}", .{ item.hp, items_module.Item.getInitialHp(item.item_type) }) catch "HP: N/A";
+    try text_lines.append(try allocator.dupeZ(u8, hp_text));
+
+    // Optional: Decay Timer
+    // const decay_text = fmt.bufPrintZ(&temp_line_buf, "Decay: {d}", .{item.decay_timer}) catch "Decay: N/A";
+    // try text_lines.append(try allocator.dupeZ(u8, decay_text));
+
+    var max_text_width: c_int = 0;
+    for (text_lines.items) |line_text| {
+        const w = ray.measureText(line_text, panel_font_size);
+        if (w > max_text_width) max_text_width = w;
+    }
+
+    const panel_width = max_text_width + (panel_padding * 2);
+    const panel_height = @as(c_int, @intCast(text_lines.items.len)) * panel_line_spacing - (panel_line_spacing - panel_font_size) + (panel_padding * 2);
+
+    var panel_x: c_int = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) + panel_offset_x;
+    var panel_y: c_int = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) + panel_offset_y;
+
+    if (panel_x + panel_width > config.screen_width) panel_x = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.x))) - panel_width - panel_offset_x;
+    if (panel_y + panel_height > config.screen_height) panel_y = @as(c_int, @intFromFloat(math.round(mouse_screen_pos.y))) - panel_height - panel_offset_y;
+    if (panel_x < 0) panel_x = 0;
+    if (panel_y < 0) panel_y = 0;
+
+    ray.drawRectangle(panel_x, panel_y, panel_width, panel_height, panel_bg_color);
+    ray.drawRectangleLines(panel_x, panel_y, panel_width, panel_height, ray.Color.dark_gray);
+
+    var current_text_y = panel_y + panel_padding;
+    var temp_draw_buf_item: [64]u8 = undefined; // Separate buffer for safety
+
+    for (text_lines.items) |line_text_z| {
+        if (std_full.mem.startsWith(u8, line_text_z, "HP:")) {
+            if (std_full.mem.indexOfScalar(u8, line_text_z, ':')) |colon_idx| {
+                const label_part_slice = line_text_z[0 .. colon_idx + 1];
+                const label_draw_str = fmt.bufPrintZ(&temp_draw_buf_item, "{s}", .{label_part_slice}) catch line_text_z;
+                ray.drawText(label_draw_str, panel_x + panel_padding, current_text_y, panel_font_size, panel_text_color);
+                const label_width = ray.measureText(label_draw_str, panel_font_size);
+                const value_part_slice = line_text_z[colon_idx + 2 ..];
+                const value_draw_str = fmt.bufPrintZ(&temp_draw_buf_item, "{s}", .{value_part_slice}) catch "";
                 ray.drawText(value_draw_str, panel_x + panel_padding + label_width + 2, current_text_y, panel_font_size, panel_stat_value_color);
             } else {
                 ray.drawText(line_text_z, panel_x + panel_padding, current_text_y, panel_font_size, panel_text_color);
@@ -194,20 +273,22 @@ pub fn drawUI(
     allocator: std_full.mem.Allocator,
     atlas_manager_ptr: *const atlas_manager.AtlasManager,
     world: *const types.GameWorld,
-    collected_wood: u32,
-    collected_rocks: u32,
-    collected_brush_items: u32,
-    is_music_muted: bool,
-    audio_stream_loaded: bool,
-    hovered_entity_idx: ?usize,
-    mouse_screen_pos: ray.Vector2,
+    collected_wood_val: u32,
+    collected_rocks_val: u32,
+    collected_brush_items_val: u32,
+    is_music_muted_val: bool,
+    audio_stream_loaded_val: bool,
+    hovered_entity_idx_val: ?usize,
+    hovered_item_idx_val: ?usize, // NEW: Pass hovered item index
+    mouse_screen_pos_val: ray.Vector2,
+    is_game_paused_val: bool,
 ) void {
     var current_y_pos_resources: c_int = ui_padding;
     const resource_label_x = config.screen_width - ui_padding;
 
-    drawResourceLine(allocator, resource_label_x, &current_y_pos_resources, collected_wood, .WoodIcon, atlas_manager_ptr);
-    drawResourceLine(allocator, resource_label_x, &current_y_pos_resources, collected_rocks, .RockIcon, atlas_manager_ptr);
-    drawResourceLine(allocator, resource_label_x, &current_y_pos_resources, collected_brush_items, .BrushItemIcon, atlas_manager_ptr);
+    drawResourceLine(allocator, resource_label_x, &current_y_pos_resources, collected_wood_val, .WoodIcon, atlas_manager_ptr);
+    drawResourceLine(allocator, resource_label_x, &current_y_pos_resources, collected_rocks_val, .RockIcon, atlas_manager_ptr);
+    drawResourceLine(allocator, resource_label_x, &current_y_pos_resources, collected_brush_items_val, .BrushItemIcon, atlas_manager_ptr);
 
     var current_y_pos_entities: c_int = ui_padding;
     const entity_label_x = ui_padding;
@@ -236,10 +317,11 @@ pub fn drawUI(
     drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Brush: {d}", .{brush_count}, config.ui_panel_text_color, font_size, line_spacing);
     drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Sheep: {d}", .{sheep_count}, config.ui_panel_text_color, font_size, line_spacing);
     drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Bears: {d}", .{bear_count}, config.ui_panel_text_color, font_size, line_spacing);
-    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Total: {d}", .{world.entities.items.len}, config.ui_panel_text_color, font_size, line_spacing);
+    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Items: {d}", .{world.items.items.len}, config.ui_panel_text_color, font_size, line_spacing); // Added item count
+    drawTextLine(allocator, entity_label_x, &current_y_pos_entities, "Total Entities: {d}", .{world.entities.items.len}, config.ui_panel_text_color, font_size, line_spacing);
 
-    if (audio_stream_loaded) {
-        const speaker_sprite_id = if (is_music_muted) atlas_manager.SpriteId.SpeakerMuted else atlas_manager.SpriteId.SpeakerUnmuted;
+    if (audio_stream_loaded_val) {
+        const speaker_sprite_id = if (is_music_muted_val) atlas_manager.SpriteId.SpeakerMuted else atlas_manager.SpriteId.SpeakerUnmuted;
         if (atlas_manager_ptr.getSpriteInfo(speaker_sprite_id)) |sprite_info| {
             const icon_height = @as(c_int, @intFromFloat(math.round(sprite_info.source_rect.height)));
             const icon_x = ui_padding;
@@ -261,11 +343,28 @@ pub fn drawUI(
     const fps_y_pos = config.screen_height - ui_padding - font_size;
     ray.drawText(fps_text_slice_z, fps_x_pos, fps_y_pos, font_size, ray.Color.white);
 
-    if (hovered_entity_idx) |h_idx| {
+    if (is_game_paused_val) {
+        const pause_text = "PAUSED (Spacebar)";
+        const pause_font_size: c_int = 20;
+        const pause_text_width = ray.measureText(pause_text, pause_font_size);
+        const pause_x = @divTrunc(config.screen_width - pause_text_width, 2);
+        const pause_y = @divTrunc(config.screen_height - pause_font_size, 2);
+        ray.drawText(pause_text, pause_x, pause_y, pause_font_size, ray.Color.yellow);
+    }
+
+    // Prioritize entity hover panel over item hover panel if both are somehow active
+    if (hovered_entity_idx_val) |h_idx| {
         if (h_idx < world.entities.items.len) {
             const entity = world.entities.items[h_idx];
-            drawHoveredEntityStatsPanel(allocator, entity, mouse_screen_pos) catch |err| {
+            drawHoveredEntityStatsPanel(allocator, entity, mouse_screen_pos_val) catch |err| {
                 log.err("Failed to draw entity stats panel: {s}", .{@errorName(err)});
+            };
+        }
+    } else if (hovered_item_idx_val) |item_idx| { // NEW: Draw item stats panel
+        if (item_idx < world.items.items.len) {
+            const item = world.items.items[item_idx];
+            drawHoveredItemStatsPanel(allocator, item, mouse_screen_pos_val) catch |err| {
+                log.err("Failed to draw item stats panel: {s}", .{@errorName(err)});
             };
         }
     }
