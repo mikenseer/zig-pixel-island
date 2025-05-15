@@ -11,9 +11,8 @@ const ArrayList = std_full.ArrayList;
 const Allocator = std_full.mem.Allocator;
 const log = std_full.log;
 const atlas_manager = @import("atlas_manager.zig");
-const items_module = @import("items.zig"); // Renamed to avoid conflict
+const items_module = @import("items.zig");
 
-// ... (terrainToRaylibColor, EntityMetrics, getEntityMetrics, redrawStaticWorldTexture, drawEntityFromAtlas remain same)
 fn terrainToRaylibColor(terrain: types.TerrainType, is_overlay: bool) ray.Color {
     _ = is_overlay;
     return switch (terrain) {
@@ -79,11 +78,11 @@ pub fn getEntityMetrics(entity: types.Entity, am: *const atlas_manager.AtlasMana
         .RockCluster, .Brush => {
             ax = 0.0;
             ay = 0.0;
-        }, // Typically anchored at top-left or bottom-left
+        },
         .Player, .Sheep, .Bear => {
             ax = 0.5;
             ay = 1.0;
-        }, // Anchored at bottom-center
+        },
     }
 
     const rect_x = @as(f32, @floatFromInt(entity.x)) - (@as(f32, @floatFromInt(w)) * ax);
@@ -99,7 +98,6 @@ pub fn getEntityMetrics(entity: types.Entity, am: *const atlas_manager.AtlasMana
 }
 
 pub fn redrawStaticWorldTexture(world: *const types.GameWorld, target_texture: ray.RenderTexture2D) void {
-    // ... (redrawStaticWorldTexture remains same)
     ray.beginTextureMode(target_texture);
     defer ray.endTextureMode();
     ray.clearBackground(ray.Color.blank);
@@ -118,7 +116,6 @@ pub fn redrawStaticWorldTexture(world: *const types.GameWorld, target_texture: r
 }
 
 fn drawEntityFromAtlas(entity: types.Entity, am: *const atlas_manager.AtlasManager, metrics: EntityMetrics) void {
-    // ... (drawEntityFromAtlas remains same)
     const sprite_id: ?atlas_manager.SpriteId = switch (entity.entity_type) {
         .Tree => switch (entity.growth_stage) {
             0 => .TreeSeedling,
@@ -143,13 +140,11 @@ fn drawEntityFromAtlas(entity: types.Entity, am: *const atlas_manager.AtlasManag
     }
 }
 
-// NEW: Helper to get the screen rectangle for an item for hover detection and drawing outline
 pub fn getItemScreenRect(item: items_module.Item, am: *const atlas_manager.AtlasManager) ?ray.Rectangle {
     const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(item.item_type);
     if (am.getSpriteInfo(sprite_id)) |sprite_info| {
         const item_w = sprite_info.source_rect.width;
         const item_h = sprite_info.source_rect.height;
-        // Items are drawn centered on their tile
         const rect_x = @as(f32, @floatFromInt(item.x)) + 0.5 - (item_w / 2.0);
         const rect_y = @as(f32, @floatFromInt(item.y)) + 0.5 - (item_h / 2.0);
         return ray.Rectangle{
@@ -159,23 +154,27 @@ pub fn getItemScreenRect(item: items_module.Item, am: *const atlas_manager.Atlas
             .height = item_h,
         };
     }
-    return null; // Fallback if no sprite info (e.g., for a simple pixel draw)
+    return ray.Rectangle{
+        .x = @as(f32, @floatFromInt(item.x)),
+        .y = @as(f32, @floatFromInt(item.y)),
+        .width = 1.0,
+        .height = 1.0,
+    };
 }
 
 pub fn drawItems(
     world: *const types.GameWorld,
     am: *const atlas_manager.AtlasManager,
-    hovered_item_idx: ?usize, // NEW
-    camera_ptr: *const ray.Camera2D, // NEW for line thickness
+    hovered_item_idx: ?usize,
+    camera_ptr: *const ray.Camera2D,
 ) void {
     for (world.items.items, 0..) |item, idx| {
-        if (getItemScreenRect(item, am)) |item_rect| {
-            const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(item.item_type);
-            if (am.getSpriteInfo(sprite_id)) |sprite_info| {
+        const sprite_id = atlas_manager.AtlasManager.getSpriteIdForItem(item.item_type);
+        if (am.getSpriteInfo(sprite_id)) |sprite_info| {
+            if (getItemScreenRect(item, am)) |item_rect| {
                 const dest_pos = ray.Vector2{ .x = item_rect.x, .y = item_rect.y };
                 ray.drawTextureRec(am.atlas_texture, sprite_info.source_rect, dest_pos, ray.Color.white);
 
-                // Draw red outline if hovered
                 if (hovered_item_idx != null and hovered_item_idx.? == idx) {
                     var line_thickness: f32 = 1.0;
                     if (camera_ptr.zoom != 0) {
@@ -183,18 +182,8 @@ pub fn drawItems(
                     }
                     ray.drawRectangleLinesEx(item_rect, line_thickness, config.item_selection_outline_color);
                 }
-            } else { // Fallback if no sprite info
-                const fallback_color = switch (item.item_type) {
-                    .Meat => ray.Color.red,
-                    .BrushResource => ray.Color.yellow,
-                    .Log => ray.Color.brown,
-                    .RockItem => ray.Color.gray,
-                    .CorpseSheep, .CorpseBear => ray.Color.dark_gray,
-                    .Grain => ray.Color.gold,
-                };
-                ray.drawPixel(item.x, item.y, fallback_color);
             }
-        } else { // Fallback if even rect couldn't be determined (e.g. 1x1 pixel items)
+        } else {
             const fallback_color = switch (item.item_type) {
                 .Meat => ray.Color.red,
                 .BrushResource => ray.Color.yellow,
@@ -204,8 +193,6 @@ pub fn drawItems(
                 .Grain => ray.Color.gold,
             };
             ray.drawPixel(item.x, item.y, fallback_color);
-
-            // Draw red outline for 1x1 pixel items if hovered
             if (hovered_item_idx != null and hovered_item_idx.? == idx) {
                 var line_thickness: f32 = 1.0;
                 if (camera_ptr.zoom != 0) {
@@ -217,7 +204,6 @@ pub fn drawItems(
     }
 }
 
-// ... (DrawableEntity, DrawLayer, lessThanDrawableEntities remain same) ...
 pub const DrawableEntity = struct {
     entity_ptr: ?*const types.Entity = null,
     cloud_ptr: ?*const types.Cloud = null,
@@ -256,14 +242,16 @@ pub fn drawDynamicElementsAndOverlays(
     world: *const types.GameWorld,
     camera_ptr: *const ray.Camera2D,
     hovered_entity_idx: ?usize,
+    followed_entity_idx: ?usize,
     allocator: Allocator,
     atlas_manager_ptr: *const atlas_manager.AtlasManager,
     draw_list: *ArrayList(DrawableEntity),
 ) void {
-    // ... (drawDynamicElementsAndOverlays remains same, but ensure it calls getEntityMetrics correctly) ...
     _ = allocator;
+    _ = followed_entity_idx;
     draw_list.shrinkRetainingCapacity(0);
 
+    // CORRECTED: Iterate without index if not used
     for (world.entities.items) |*entity_ptr| {
         const entity = entity_ptr.*;
         const metrics = getEntityMetrics(entity, atlas_manager_ptr);
@@ -388,18 +376,17 @@ pub fn drawDynamicElementsAndOverlays(
         }
     }
 
-    // Draw hovered entity outline (if any, and if no item is hovered or entity takes precedence)
     if (hovered_entity_idx) |h_idx| {
         if (h_idx < world.entities.items.len) {
             const entity = world.entities.items[h_idx];
             var metrics_for_hover: ?EntityMetrics = null;
-            for (draw_list.items) |*item_in_draw_list| { // Use a different name for item in draw_list
+            for (draw_list.items) |*item_in_draw_list| {
                 if (item_in_draw_list.entity_ptr != null and @intFromPtr(item_in_draw_list.entity_ptr) == @intFromPtr(&world.entities.items[h_idx])) {
                     metrics_for_hover = item_in_draw_list.metrics;
                     break;
                 }
             }
-            if (metrics_for_hover == null) { // Fallback if not found in draw_list (should be rare)
+            if (metrics_for_hover == null) {
                 metrics_for_hover = getEntityMetrics(entity, atlas_manager_ptr);
             }
 
@@ -418,7 +405,6 @@ pub fn drawDynamicElementsAndOverlays(
     }
 }
 
-// drawCarriedItems remains the same
 pub fn drawCarriedItems(world: *const types.GameWorld, am: *const atlas_manager.AtlasManager) void {
     for (world.entities.items) |entity| {
         if (entity.inventory[0].item_type) |carried_item_type| {

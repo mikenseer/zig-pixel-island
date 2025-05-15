@@ -55,16 +55,18 @@ const max_zoom: f32 = @min(@as(f32, @floatFromInt(config.screen_width)), @as(f32
 const zoom_speed_factor: f32 = 0.1;
 var hovered_entity_idx: ?usize = null;
 var hovered_item_idx: ?usize = null;
-var current_mouse_screen_pos: ray.Vector2 = .{ .x = 0, .y = 0 }; // Correct global declaration
+var current_mouse_screen_pos: ray.Vector2 = .{ .x = 0, .y = 0 };
+var followed_entity_idx: ?usize = null; // NEW: For camera follow
+var followed_item_idx: ?usize = null; // NEW: For camera follow
 
 // --- Rendering ---
 var static_world_texture: ray.RenderTexture2D = undefined;
 var static_world_needs_redraw: bool = true;
 
-// --- Resources ---
-var collected_wood: u32 = 0;
-var collected_rocks: u32 = 0;
-var collected_brush_items: u32 = 0;
+// REMOVED: Resource Counters
+// var collected_wood: u32 = 0;
+// var collected_rocks: u32 = 0;
+// var collected_brush_items: u32 = 0;
 
 // --- Audio ---
 var ogg_file_data: []u8 = undefined;
@@ -80,7 +82,6 @@ const dummy_audio_byte: u8 = 0;
 var current_loading_status_buffer: [100]u8 = undefined;
 
 fn audioStreamCallback(buffer_ptr: ?*anyopaque, frames_to_process: c_uint) callconv(.C) void {
-    // ... (audioStreamCallback from your working version)
     const buffer: [*]i16 = if (buffer_ptr) |ptr| @as([*]i16, @alignCast(@ptrCast(ptr))) else return;
     const samples_to_process = frames_to_process * @as(c_uint, ogg_wave_info.channels);
     var samples_processed: c_uint = 0;
@@ -113,7 +114,6 @@ fn audioStreamCallback(buffer_ptr: ?*anyopaque, frames_to_process: c_uint) callc
 }
 
 fn drawCurrentLoadingScreen(status_text_slice: [:0]const u8) void {
-    // ... (drawCurrentLoadingScreen from your working version) ...
     if (ray.isWindowReady()) {
         ray.beginDrawing();
         defer ray.endDrawing();
@@ -148,7 +148,6 @@ fn drawCurrentLoadingScreen(status_text_slice: [:0]const u8) void {
 }
 
 fn updateAndDrawLoadingStatus(comptime status_fmt: []const u8, args: anytype) void {
-    // ... (updateAndDrawLoadingStatus from your working version) ...
     @memset(current_loading_status_buffer[0..], @as(u8, 0));
     const status_text_slice = fmt.bufPrintZ(&current_loading_status_buffer, status_fmt, args) catch |err| {
         log.err("Failed to format loading status: {s}", .{@errorName(err)});
@@ -162,7 +161,6 @@ fn updateAndDrawLoadingStatus(comptime status_fmt: []const u8, args: anytype) vo
 }
 
 fn initGame(allocator: std_full.mem.Allocator) !void {
-    // ... (initGame audio loading part from your working version) ...
     updateAndDrawLoadingStatus("Loading Audio...", .{});
     ogg_file_data = ray.loadFileData("audio/zigisland.ogg") catch |err| blk: {
         log.warn("Failed to load OGG file data ('audio/zigisland.ogg'): {s}. Audio will be disabled.", .{@errorName(err)});
@@ -215,7 +213,6 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
         audio_stream_loaded = false;
         log.warn("OGG file data not loaded. Audio will be disabled.", .{});
     }
-    // ... (rest of initGame remains the same) ...
     updateAndDrawLoadingStatus("Setting up Game Systems...", .{});
     ray.setTargetFPS(60);
 
@@ -253,7 +250,6 @@ fn initGame(allocator: std_full.mem.Allocator) !void {
 }
 
 fn shutdownGame(allocator: std_full.mem.Allocator) void {
-    // ... (shutdownGame from your working version) ...
     _ = allocator;
     log.info("Shutting down game systems...", .{});
 
@@ -301,8 +297,7 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         log.info("Game Paused: {any}", .{is_game_paused});
     }
 
-    // Update mouse position regardless of pause state for UI interaction
-    current_mouse_screen_pos = ray.getMousePosition(); // Ensure this uses the global variable
+    current_mouse_screen_pos = ray.getMousePosition();
     const mouse_world_pos = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
 
     if (!is_game_paused) {
@@ -325,6 +320,12 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
                     if (h_idx == i_entity) {
                         hovered_entity_idx = null;
                     } else if (h_idx > i_entity) hovered_entity_idx.? -= 1;
+                }
+                // If an entity is removed, also clear follow if it was the followed entity
+                if (followed_entity_idx != null and followed_entity_idx.? == i_entity) {
+                    followed_entity_idx = null;
+                } else if (followed_entity_idx != null and followed_entity_idx.? > i_entity) {
+                    followed_entity_idx.? -= 1;
                 }
                 continue;
             }
@@ -349,6 +350,12 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
                     if (h_idx_item == i_item) {
                         hovered_item_idx = null;
                     } else if (h_idx_item > i_item) hovered_item_idx.? -= 1;
+                }
+                // If an item is removed, also clear follow if it was the followed item
+                if (followed_item_idx != null and followed_item_idx.? == i_item) {
+                    followed_item_idx = null;
+                } else if (followed_item_idx != null and followed_item_idx.? > i_item) {
+                    followed_item_idx.? -= 1;
                 }
                 continue;
             }
@@ -379,7 +386,7 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         i_hover_entity -= 1;
     }
 
-    if (hovered_entity_idx == null) {
+    if (hovered_entity_idx == null) { // Only check for item hover if no entity is hovered
         var i_hover_item: usize = world.items.items.len;
         while (i_hover_item > 0) {
             const current_item_idx = i_hover_item - 1;
@@ -398,22 +405,28 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
         }
     }
 
+    // Camera Zoom and Pan (always active)
     const wheel_move = ray.getMouseWheelMove();
     if (wheel_move != 0) {
         const mouse_world_pos_before_zoom = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
         camera.zoom += wheel_move * camera.zoom * zoom_speed_factor;
         camera.zoom = math.clamp(camera.zoom, min_zoom, max_zoom);
         const mouse_world_pos_after_zoom = ray.getScreenToWorld2D(current_mouse_screen_pos, camera);
+        // Adjust target to keep mouse pointer over the same world position after zoom
         camera.target.x += mouse_world_pos_before_zoom.x - mouse_world_pos_after_zoom.x;
         camera.target.y += mouse_world_pos_before_zoom.y - mouse_world_pos_after_zoom.y;
+        // If following something, zooming shouldn't break the follow, target will be reset below.
     }
     if (ray.isMouseButtonDown(ray.MouseButton.middle)) {
         const delta = ray.getMouseDelta();
         camera.target.x -= delta.x / camera.zoom;
         camera.target.y -= delta.y / camera.zoom;
+        followed_entity_idx = null; // Panning breaks follow
+        followed_item_idx = null;
     }
 
-    if (!is_game_paused and ray.isMouseButtonPressed(ray.MouseButton.left)) {
+    // Left Click Logic (Follow or Unfollow)
+    if (ray.isMouseButtonPressed(ray.MouseButton.left)) {
         var ui_interacted_this_click = false;
         if (atlas_manager_instance) |am_instance| {
             if (ui.checkMuteButtonClick(&am_instance, current_mouse_screen_pos)) {
@@ -425,35 +438,66 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
             }
         }
 
-        if (!ui_interacted_this_click and hovered_entity_idx != null) {
-            if (hovered_entity_idx) |entity_idx_to_collect| {
-                if (entity_idx_to_collect < world.entities.items.len) {
-                    var entity_to_interact_ptr = &world.entities.items[entity_idx_to_collect];
-                    switch (entity_to_interact_ptr.entity_type) {
-                        .Tree => {
-                            collected_wood += 1;
-                            entity_to_interact_ptr.current_hp = 0;
-                        },
-                        .RockCluster => {
-                            collected_rocks += 1;
-                            entity_to_interact_ptr.current_hp = 0;
-                        },
-                        .Brush => {
-                            entity_to_interact_ptr.current_hp = 0;
-                        },
-                        .Player, .Sheep, .Bear => {
-                            log.debug("Player clicked on AI entity: {any}", .{entity_to_interact_ptr.entity_type});
-                        },
-                    }
-                } else {
-                    hovered_entity_idx = null;
-                }
-            }
-        } else if (!ui_interacted_this_click and hovered_item_idx != null) {
-            if (hovered_item_idx) |item_idx_val| {
-                log.debug("Player clicked on item index: {d}", .{item_idx_val});
+        if (!ui_interacted_this_click) {
+            if (hovered_entity_idx) |h_idx| {
+                log.debug("Clicked to follow entity: {d}", .{h_idx});
+                followed_entity_idx = h_idx;
+                followed_item_idx = null;
+            } else if (hovered_item_idx) |h_item_idx| {
+                log.debug("Clicked to follow item: {d}", .{h_item_idx});
+                followed_item_idx = h_item_idx;
+                followed_entity_idx = null;
+            } else { // Clicked on empty space
+                log.debug("Clicked on empty space, unfollowing.", .{});
+                followed_entity_idx = null;
+                followed_item_idx = null;
             }
         }
+    }
+
+    // Update Camera Target if Following
+    if (!is_game_paused) { // Camera follow updates only if not paused, otherwise pan is king
+        if (followed_entity_idx) |idx| {
+            if (idx < world.entities.items.len) { // Ensure entity still exists
+                const entity_to_follow = world.entities.items[idx];
+                // Center on entity. Adjust if you want a different part of entity.
+                if (atlas_manager_instance) |am| {
+                    const metrics = rendering.getEntityMetrics(entity_to_follow, &am);
+                    if (metrics.rect) |rect| {
+                        camera.target.x = rect.x + rect.width / 2.0;
+                        camera.target.y = rect.y + rect.height / 2.0;
+                    } else { // Fallback to entity x,y if no rect
+                        camera.target.x = @as(f32, @floatFromInt(entity_to_follow.x));
+                        camera.target.y = @as(f32, @floatFromInt(entity_to_follow.y));
+                    }
+                } else {
+                    camera.target.x = @as(f32, @floatFromInt(entity_to_follow.x));
+                    camera.target.y = @as(f32, @floatFromInt(entity_to_follow.y));
+                }
+            } else {
+                followed_entity_idx = null; // Followed entity no longer exists
+            }
+        } else if (followed_item_idx) |idx| {
+            if (idx < world.items.items.len) { // Ensure item still exists
+                const item_to_follow = world.items.items[idx];
+                // Center on item (items are 1x1, so x,y is fine, or center of its sprite)
+                if (atlas_manager_instance) |am| {
+                    if (rendering.getItemScreenRect(item_to_follow, &am)) |rect| {
+                        camera.target.x = rect.x + rect.width / 2.0;
+                        camera.target.y = rect.y + rect.height / 2.0;
+                    } else {
+                        camera.target.x = @as(f32, @floatFromInt(item_to_follow.x)) + 0.5;
+                        camera.target.y = @as(f32, @floatFromInt(item_to_follow.y)) + 0.5;
+                    }
+                } else {
+                    camera.target.x = @as(f32, @floatFromInt(item_to_follow.x)) + 0.5;
+                    camera.target.y = @as(f32, @floatFromInt(item_to_follow.y)) + 0.5;
+                }
+            } else {
+                followed_item_idx = null; // Followed item no longer exists
+            }
+        }
+        // If neither is followed, camera target is controlled by panning.
     }
 
     if (static_world_needs_redraw and !is_game_paused) {
@@ -464,7 +508,6 @@ fn updateGame(allocator: std_full.mem.Allocator) void {
 
 // Main game drawing logic.
 fn drawGame(allocator: std_full.mem.Allocator) void {
-    // ... (drawGame from your working version, ensure current_mouse_screen_pos is used for ui.drawUI) ...
     ray.beginDrawing();
     defer ray.endDrawing();
     ray.clearBackground(config.very_deep_water_color);
@@ -478,7 +521,8 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
     }
 
     if (atlas_manager_instance) |am_instance| {
-        rendering.drawDynamicElementsAndOverlays(&world, &camera, hovered_entity_idx, allocator, &am_instance, &drawable_entity_list);
+        // Pass followed entity/item to draw a different highlight if desired
+        rendering.drawDynamicElementsAndOverlays(&world, &camera, hovered_entity_idx, followed_entity_idx, allocator, &am_instance, &drawable_entity_list);
     }
 
     if (atlas_manager_instance) |am_instance| {
@@ -488,26 +532,16 @@ fn drawGame(allocator: std_full.mem.Allocator) void {
     ray.endMode2D();
 
     if (atlas_manager_instance) |am_instance| {
-        ui.drawUI(
-            allocator,
-            &am_instance,
-            &world,
-            collected_wood,
-            collected_rocks,
-            collected_brush_items,
-            is_music_muted,
-            audio_stream_loaded,
-            hovered_entity_idx,
-            hovered_item_idx,
-            current_mouse_screen_pos, // Using the global current_mouse_screen_pos
-            is_game_paused,
+        ui.drawUI(allocator, &am_instance, &world,
+            // REMOVED: collected_wood_val, collected_rocks_val, collected_brush_items_val,
+            is_music_muted, audio_stream_loaded, hovered_entity_idx, hovered_item_idx, current_mouse_screen_pos, is_game_paused, followed_entity_idx, // NEW: Pass followed entity for UI
+            followed_item_idx // NEW: Pass followed item for UI
         );
     }
 }
 
 // Main application entry point.
 pub fn main() !void {
-    // ... (main function from your working version) ...
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
